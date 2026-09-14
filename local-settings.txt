@@ -1,0 +1,17 @@
+
+    "IPv4 Address":"192.168.50.117"
+
+    
+cd d:\playlist-service
+npm start
+
+
+
+Get-Process | Where-Object { $_.ProcessName -match 'yt|youtube|ffmpeg' } | Select-Object Id, ProcessName | Sort-Object ProcessName | Format-Table -AutoSize | Out-String
+Fastest ways to stop it on Windows PowerShell:
+
+If it is running in the foreground terminal, press Ctrl+C.
+If it is still running in background, run:
+Stop-Process -Id 107104 -Force
+Alternative:
+taskkill /PID 107104 /F

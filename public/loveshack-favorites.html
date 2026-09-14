@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Love Shack Favorites</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/loveshack.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+
+    <main class="page">
+      <header class="hero">
+        <h1>Love Shack Favorites</h1>
+        <p>Saved favorites grouped by playlist name. Keep one playlist per day or however you want.</p>
+      </header>
+
+      <section class="controls card">
+        <div class="control-row">
+          <a class="btn" href="/loveshack">Back To Deck</a>
+          <button id="refreshFavoritesBtn" class="btn btn-primary" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="favorites-columns">
+        <div class="playlist-groups card">
+          <h2>Favorites Playlists</h2>
+          <div id="favoritesGroups"></div>
+        </div>
+
+        <div class="favorites-player card">
+          <h2 id="favoritesNowPlaying">Now Playing: none</h2>
+          <video id="favoritesPlayer" controls preload="metadata"></video>
+          <div class="control-row playback-skip-row">
+            <button id="favoritesPrevBtn" class="btn" type="button">Previous Video</button>
+            <button id="favoritesNextBtn" class="btn" type="button">Next Video</button>
+          </div>
+          <p id="favoritesStatus" class="status">Ready.</p>
+        </div>
+      </section>
+    </main>
+
+    <template id="favoriteItemTemplate">
+      <li>
+        <span class="video-name"></span>
+        <div class="actions">
+          <button class="btn tiny move-up" title="Move up">↑</button>
+          <button class="btn tiny move-down" title="Move down">↓</button>
+          <button class="btn tiny to-main" title="Move to top of main playlist">To Main</button>
+          <button class="btn tiny play">Play</button>
+          <button class="btn tiny danger remove">Remove</button>
+        </div>
+      </li>
+    </template>
+
+    <script src="/assets/loveshack-favorites.js" defer></script>
+  </body>
+</html>

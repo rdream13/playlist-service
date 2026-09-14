@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Love Shack Playlist</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/loveshack.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+
+    <main class="page">
+      <header class="hero">
+        <h1>Love Shack Video Deck</h1>
+        <p>Manage your local videos and let them play one after another without stopping.</p>
+      </header>
+
+      <section class="controls card">
+        <div class="control-row">
+          <button id="refreshBtn" class="btn">Refresh</button>
+          <button id="playAllBtn" class="btn btn-primary">Play All</button>
+          <button id="stopBtn" class="btn btn-ghost">Stop</button>
+          <a class="btn" href="/loveshack-favorites">Favorites</a>
+          <div class="control-links-spacer" aria-hidden="true"></div>
+          <div class="quick-links" aria-label="Quick links">
+            <a href="https://pornhub.com" target="_blank" rel="noopener noreferrer">pornhub.com</a>
+            <a href="https://xvideos.com" target="_blank" rel="noopener noreferrer">xvideos.com</a>
+            <a href="https://xnxx.com" target="_blank" rel="noopener noreferrer">xnxx.com</a>
+            <a href="https://xhamster.com" target="_blank" rel="noopener noreferrer">xhamster.com</a>
+            <a href="https://spankbang.com" target="_blank" rel="noopener noreferrer">spankbang.com</a>
+          </div>
+        </div>
+
+        <form id="uploadForm" class="upload-form">
+          <label for="videoInput">Add video</label>
+          <input id="videoInput" name="video" type="file" accept="video/*" required />
+          <button class="btn" type="submit">Upload</button>
+        </form>
+
+        <form id="downloadForm" class="download-form">
+          <label for="downloadUrl">Download from URL</label>
+          <input
+            id="downloadUrl"
+            name="url"
+            type="url"
+            placeholder="https://..."
+            required
+          />
+          <input
+            id="cookiesFile"
+            name="cookiesFile"
+            type="text"
+            placeholder="Optional cookies file path, e.g. videos/cookies.txt"
+          />
+          <input
+            id="ytDlpPath"
+            name="ytDlpPath"
+            type="text"
+            placeholder="Optional yt-dlp executable path, e.g. C:/tools/yt-dlp.exe"
+          />
+          <select id="cookiesFromBrowser" name="cookiesFromBrowser">
+            <option value="">No browser cookies</option>
+            <option value="chrome">Use Chrome cookies</option>
+            <option value="edge">Use Edge cookies</option>
+            <option value="firefox">Use Firefox cookies</option>
+            <option value="brave">Use Brave cookies</option>
+          </select>
+          <label class="inline-checkbox" for="downloadPlaylist">
+            <input id="downloadPlaylist" name="downloadPlaylist" type="checkbox" />
+            Download playlist entries (if URL is a playlist)
+          </label>
+          <button id="downloadBtn" class="btn" type="submit">Download URL</button>
+        </form>
+        <p id="downloaderStatus" class="downloader-status">Checking downloader...</p>
+        <details class="tips">
+          <summary>Download troubleshooting tips</summary>
+          <ul>
+            <li>Use cookies when you see bot checks or private/member-only restrictions.</li>
+            <li>For single videos from playlist pages, paste the Share link instead of the playlist URL.</li>
+            <li>Enable playlist checkbox only when you actually want all playlist items.</li>
+            <li>If downloads hang, update yt-dlp (nightly can help) and retry with cookies.</li>
+            <li>If high quality arrives as separate streams, yt-dlp + ffmpeg will merge automatically.</li>
+            <li>For deep debugging, run yt-dlp with -v in terminal using the same URL/cookies.</li>
+          </ul>
+        </details>
+
+        <div id="downloadStatus" class="download-status-panel" style="display: none">
+          <h3>Download Progress</h3>
+          <div id="downloadJobsList" class="download-jobs-list"></div>
+        </div>
+      </section>
+
+      <section class="layout">
+        <div class="player card">
+          <h2 id="nowPlayingTitle">Now Playing: none</h2>
+          <video id="player" controls preload="metadata"></video>
+          <div class="control-row playback-skip-row">
+            <button id="prevVideoBtn" class="btn" type="button">Previous Video</button>
+            <button id="nextVideoBtn" class="btn" type="button">Next Video</button>
+          </div>
+          <p id="statusText" class="status">Ready.</p>
+        </div>
+
+        <div class="list card">
+          <div class="playlist-header-row">
+            <h2>Playlist</h2>
+            <button id="playlistPlayAllBtn" class="btn btn-primary" type="button">Play Playlist</button>
+          </div>
+          <ul id="videoList"></ul>
+        </div>
+      </section>
+    </main>
+
+    <template id="videoItemTemplate">
+      <li class="video-item">
+        <span class="name"></span>
+        <div class="actions">
+          <button class="btn tiny move-up" title="Move up">↑</button>
+          <button class="btn tiny move-down" title="Move down">↓</button>
+          <button class="btn tiny play-one">Play</button>
+          <button class="btn tiny favorite">Fav</button>
+          <button class="btn tiny rename">Rename</button>
+          <button class="btn tiny danger delete">Delete</button>
+        </div>
+      </li>
+    </template>
+
+    <dialog id="favoriteDialog" class="favorite-dialog">
+      <form id="favoriteForm" class="favorite-form" method="dialog">
+        <h3>Add To Favorites</h3>
+        <p id="favoriteVideoName" class="favorite-target"></p>
+
+        <label for="favoritePlaylistSelect">Choose playlist</label>
+        <select id="favoritePlaylistSelect" name="playlistSelect">
+          <option value="">Choose existing playlist...</option>
+        </select>
+
+        <label for="favoriteNewPlaylist">Or create new playlist</label>
+        <input
+          id="favoriteNewPlaylist"
+          name="newPlaylist"
+          type="text"
+          maxlength="80"
+          placeholder="ex: 2026-07-15"
+        />
+
+        <p id="favoriteMessage" class="favorite-message"></p>
+
+        <div class="favorite-actions">
+          <button class="btn" type="button" id="favoriteCancelBtn">Cancel</button>
+          <button class="btn btn-primary" type="submit">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/assets/loveshack.js" defer></script>
+  </body>
+</html>
