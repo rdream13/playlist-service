@@ -167,6 +167,31 @@ async function sendVideoToMainPlaylist(videoName) {
   }
 }
 
+async function renameFavoriteVideo(oldName) {
+  const newName = prompt('Rename video to:', oldName);
+  if (!newName || newName.trim() === oldName) {
+    return;
+  }
+
+  const res = await fetch('/api/videos/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldName, newName: newName.trim() })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Rename failed.');
+  }
+
+  state.playlists = data.playlists || state.playlists;
+  if (state.currentVideoName === oldName) {
+    state.currentVideoName = newName.trim();
+    setNowPlaying(state.currentVideoName);
+  }
+  renderPlaylists();
+  el.status.textContent = `Renamed ${oldName} to ${newName.trim()}.`;
+}
+
 function renderPlaylists() {
   el.groups.innerHTML = '';
 
@@ -252,6 +277,14 @@ function renderPlaylists() {
         try {
           await sendVideoToMainPlaylist(video.name);
           el.status.textContent = `Sent ${video.name} to the top of the main playlist.`;
+        } catch (err) {
+          el.status.textContent = err.message;
+        }
+      });
+
+      row.querySelector('.rename').addEventListener('click', async () => {
+        try {
+          await renameFavoriteVideo(video.name);
         } catch (err) {
           el.status.textContent = err.message;
         }

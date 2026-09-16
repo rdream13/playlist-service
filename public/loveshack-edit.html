@@ -19,7 +19,7 @@
     <main class="page edit-page">
       <header class="hero">
         <h1>Love Shack Edit</h1>
-        <p>Cut a video segment and save the trimmed clip into your favorites playlist.</p>
+        <p>Trim one range, keep two scenes, or remove a scene and stitch the result.</p>
       </header>
 
       <section class="controls card">
@@ -48,12 +48,30 @@
 
             <div class="trim-time-grid">
               <div>
-                <label for="trimStart">Start time</label>
+                <label for="trimStart">Scene 1 start</label>
                 <input id="trimStart" name="start" type="text" placeholder="00:00:00" value="00:00:00" />
               </div>
               <div>
-                <label for="trimEnd">End time</label>
+                <label for="trimEnd">Scene 1 end</label>
                 <input id="trimEnd" name="end" type="text" placeholder="00:00:30" value="00:00:30" />
+              </div>
+            </div>
+
+            <label for="trimEditMode">Edit mode</label>
+            <select id="trimEditMode" name="editMode">
+              <option value="keep-scenes" selected>Keep two scenes and stitch</option>
+              <option value="single">Trim one range</option>
+              <option value="remove-scene">Remove the middle scene</option>
+            </select>
+
+            <div id="secondSceneFields" class="trim-time-grid" hidden>
+              <div>
+                <label id="trimSecondStartLabel" for="trimSecondStart">Second scene start</label>
+                <input id="trimSecondStart" name="secondStart" type="text" placeholder="00:01:00" />
+              </div>
+              <div>
+                <label id="trimSecondEndLabel" for="trimSecondEnd">Second scene end</label>
+                <input id="trimSecondEnd" name="secondEnd" type="text" placeholder="00:02:00" />
               </div>
             </div>
 

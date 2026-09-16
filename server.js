@@ -326,6 +326,26 @@ function probeVideoFile(filePath) {
   });
 }
 
+function getVideoDuration(filePath) {
+  return new Promise((resolve) => {
+    const child = spawn(resolveFfprobeBin(), [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath
+    ], { windowsHide: true });
+    let stdout = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.on('error', () => resolve(null));
+    child.on('close', (code) => {
+      const duration = Number.parseFloat(stdout.trim());
+      resolve(code === 0 && Number.isFinite(duration) ? duration : null);
+    });
+  });
+}
+
 function parseTimeToSeconds(value) {
   if (typeof value !== 'string') {
     return null;
@@ -518,6 +538,147 @@ async function trimVideoFile(sourcePath, targetPath, startSeconds, endSeconds) {
       err.stderr = stderr;
       reject(err);
     });
+  });
+}
+
+function buildMultiSceneVideoName(fileName, mode, segments) {
+  const parsed = path.parse(fileName);
+  const ext = parsed.ext || '.mp4';
+  const stamps = segments
+    .map((segment) => `${formatTrimStamp(segment.start)}_${formatTrimStamp(segment.end)}`)
+    .join('__');
+  const label = mode === 'remove-scene' ? 'remove' : 'scenes';
+  return `${parsed.name} [${label} ${stamps}]${ext}`;
+}
+
+async function stitchVideoSegments(sourcePath, targetPath, segments, mode) {
+  const parsedTarget = path.parse(targetPath);
+  const tempTargetPath = path.join(
+    parsedTarget.dir,
+    `${parsedTarget.name}.tmp-${process.pid}-${Date.now()}${parsedTarget.ext || '.mp4'}`
+  );
+  const keptSegments = mode === 'remove-scene'
+    ? [{ start: 0, end: segments[0].start }, { start: segments[1].end, end: Number.MAX_SAFE_INTEGER }]
+    : segments;
+  const segmentPaths = keptSegments.map((_segment, index) =>
+    path.join(parsedTarget.dir, `${parsedTarget.name}.part-${index}-${process.pid}-${Date.now()}${parsedTarget.ext || '.mp4'}`)
+  );
+  const cleanup = () => {
+    removePartialTrimFile(tempTargetPath);
+    segmentPaths.forEach((segmentPath) => {
+      try {
+        if (fs.existsSync(segmentPath)) {
+          fs.unlinkSync(segmentPath);
+        }
+      } catch {
+        // Best-effort cleanup of failed segment files.
+      }
+    });
+  };
+  const runFfmpeg = (args, timeoutMs, stage) => new Promise((resolve, reject) => {
+    const child = spawn(resolveFfmpegBin(), args, { windowsHide: true });
+    let stderr = '';
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs);
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      error.stderr = stderr;
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        const error = new Error(`ffmpeg ${stage} timed out after ${Math.round(timeoutMs / 60000)} minutes.`);
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const error = new Error(stderr.trim() || `ffmpeg stitch failed with exit code ${code}.`);
+      error.stderr = stderr;
+      reject(error);
+    });
+  });
+
+  try {
+    for (let index = 0; index < keptSegments.length; index += 1) {
+      const segment = keptSegments[index];
+      const duration = Number.isFinite(segment.end) && segment.end !== Number.MAX_SAFE_INTEGER
+        ? Math.max(0.1, segment.end - segment.start)
+        : null;
+      const args = ['-y', '-ss', String(segment.start), '-i', sourcePath];
+      if (duration !== null) {
+        args.push('-t', String(duration));
+      }
+      args.push('-map', '0:v:0', '-map', '0:a:0?');
+      if (mode === 'keep-scenes') {
+        args.push(
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          '-crf', '28',
+          '-c:a', 'copy',
+          '-movflags', '+faststart'
+        );
+      } else {
+        args.push('-c', 'copy', '-avoid_negative_ts', 'make_zero');
+      }
+      args.push(segmentPaths[index]);
+      const segmentTimeoutMs = mode === 'keep-scenes'
+        ? Math.max(10 * 60 * 1000, duration * 8 * 1000)
+        : Math.max(5 * 60 * 1000, (duration || 1800) * 2 * 1000);
+      await appendTrimDebugLog({
+        stage: 'stitch_segment_started',
+        segmentIndex: index,
+        segment,
+        duration,
+        timeoutMinutes: Math.round(segmentTimeoutMs / 60000),
+        output: segmentPaths[index]
+      });
+      await runFfmpeg(args, segmentTimeoutMs, `segment ${index + 1}`);
+      await appendTrimDebugLog({
+        stage: 'stitch_segment_finished',
+        segmentIndex: index,
+        output: segmentPaths[index],
+        outputSize: fs.existsSync(segmentPaths[index]) ? fs.statSync(segmentPaths[index]).size : 0
+      });
+    }
+
+    const concatListPath = path.join(parsedTarget.dir, `${parsedTarget.name}.concat-${process.pid}-${Date.now()}.txt`);
+    const concatList = segmentPaths
+      .map((segmentPath) => `file '${segmentPath.replace(/'/g, "'\\''")}'`)
+      .join('\n');
+    try {
+      fs.writeFileSync(concatListPath, `${concatList}\n`, 'utf8');
+      await runFfmpeg(
+        ['-y', '-f', 'concat', '-safe', '0', '-i', concatListPath, '-c', 'copy', '-movflags', '+faststart', tempTargetPath],
+        5 * 60 * 1000,
+        'final concat'
+      );
+    } finally {
+      try { fs.unlinkSync(concatListPath); } catch {}
+    }
+
+    fs.renameSync(tempTargetPath, targetPath);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+
+  segmentPaths.forEach((segmentPath) => {
+    try {
+      if (fs.existsSync(segmentPath)) {
+        fs.unlinkSync(segmentPath);
+      }
+    } catch {
+      // Best-effort cleanup after a successful stitch.
+    }
   });
 }
 
@@ -718,6 +879,16 @@ async function renameVideoInFavorites(oldName, newName) {
 
   if (changed) {
     await saveFavoritesStore(store);
+  }
+}
+
+async function renameVideoInPlaylistState(oldName, newName) {
+  const state = await loadPlaylistState();
+  const order = state.order.map((name) => name === oldName ? newName : name);
+  const hidden = state.hidden.map((name) => name === oldName ? newName : name);
+
+  if (order.join('\0') !== state.order.join('\0') || hidden.join('\0') !== state.hidden.join('\0')) {
+    await savePlaylistState({ order, hidden });
   }
 }
 
@@ -1080,10 +1251,25 @@ app.post('/api/videos/rename', async (req, res) => {
       return;
     }
 
+    if (oldSafe.base === newSafe.base) {
+      res.status(400).json({ error: 'The new name must be different.' });
+      return;
+    }
+    if (!fs.existsSync(oldSafe.full)) {
+      res.status(404).json({ error: 'Source file not found.' });
+      return;
+    }
+    if (fs.existsSync(newSafe.full)) {
+      res.status(409).json({ error: 'Target file already exists.' });
+      return;
+    }
+
     await fsp.rename(oldSafe.full, newSafe.full);
     await renameVideoInFavorites(oldSafe.base, newSafe.base);
+    await renameVideoInPlaylistState(oldSafe.base, newSafe.base);
     const videos = await listVideos();
-    res.json({ message: 'Renamed.', videos });
+    const favorites = await buildFavoritesResponse();
+    res.json({ message: 'Renamed.', videos, ...favorites });
   } catch (err) {
     if (err.code === 'ENOENT') {
       res.status(404).json({ error: 'Source file not found.' });
@@ -1387,7 +1573,7 @@ app.post('/api/favorites/to-main', async (req, res) => {
 });
 
 app.post('/api/videos/trim', async (req, res) => {
-  const { videoName, start, end, playlistName } = req.body || {};
+  const { videoName, start, end, playlistName, mode = 'single', segments } = req.body || {};
   const safePlaylistName = normalizePlaylistName(playlistName);
   let base = null;
   let full = null;
@@ -1454,6 +1640,34 @@ app.post('/api/videos/trim', async (req, res) => {
     return;
   }
 
+  if (!['single', 'keep-scenes', 'remove-scene'].includes(mode)) {
+    res.status(400).json({ error: 'Unsupported edit mode.' });
+    return;
+  }
+
+  const normalizedSegments = Array.isArray(segments)
+    ? segments.map((segment) => ({
+      start: Number(segment?.start),
+      end: Number(segment?.end)
+    })).sort((a, b) => a.start - b.start)
+    : [];
+  if (mode !== 'single' && normalizedSegments.length !== 2) {
+    res.status(400).json({ error: 'Two valid scene ranges are required.' });
+    return;
+  }
+  if (mode !== 'single' && normalizedSegments.some((segment) =>
+    !Number.isFinite(segment.start) || !Number.isFinite(segment.end) ||
+    segment.start < 0 || segment.end <= segment.start
+  )) {
+    res.status(400).json({ error: 'Scene ranges must have valid start and end times.' });
+    return;
+  }
+  if (mode !== 'single' && normalizedSegments[1].start < normalizedSegments[0].end &&
+    normalizedSegments[0].start < normalizedSegments[1].end) {
+    res.status(400).json({ error: 'Scene ranges must not overlap.' });
+    return;
+  }
+
   try {
     const resolved = safeVideoPath(videoName);
     base = resolved.base;
@@ -1496,7 +1710,9 @@ app.post('/api/videos/trim', async (req, res) => {
       return;
     }
 
-    outputName = buildTrimmedVideoName(base, startSeconds, endSeconds);
+    outputName = mode === 'single'
+      ? buildTrimmedVideoName(base, startSeconds, endSeconds)
+      : buildMultiSceneVideoName(base, mode, normalizedSegments);
     outputFull = path.join(VIDEOS_DIR, outputName);
     trimLockKey = outputFull.toLowerCase();
 
@@ -1542,6 +1758,20 @@ app.post('/api/videos/trim', async (req, res) => {
       return;
     }
 
+    if (mode !== 'single') {
+      const sourceDuration = await getVideoDuration(full);
+      if (!Number.isFinite(sourceDuration) || normalizedSegments.some((segment) => segment.end > sourceDuration)) {
+        await appendTrimDebugLog({
+          stage: 'request_invalid',
+          reason: 'scene_outside_source_duration',
+          sourceDuration,
+          segments: normalizedSegments
+        });
+        res.status(400).json({ error: 'Both scene ranges must stay within the source video duration.' });
+        return;
+      }
+    }
+
     const outputUsableBefore = fs.existsSync(outputFull) ? (isUsableVideoFile(outputFull) || (await probeVideoFile(outputFull))) : false;
 
     if (fs.existsSync(outputFull) && outputUsableBefore) {
@@ -1567,7 +1797,11 @@ app.post('/api/videos/trim', async (req, res) => {
         endSeconds
       });
 
-      await trimVideoFile(full, outputFull, startSeconds, endSeconds);
+      if (mode === 'single') {
+        await trimVideoFile(full, outputFull, startSeconds, endSeconds);
+      } else {
+        await stitchVideoSegments(full, outputFull, normalizedSegments, mode);
+      }
     } else {
       await appendTrimDebugLog({
         stage: 'calling_ffmpeg',
@@ -1577,7 +1811,11 @@ app.post('/api/videos/trim', async (req, res) => {
         endSeconds
       });
 
-      await trimVideoFile(full, outputFull, startSeconds, endSeconds);
+      if (mode === 'single') {
+        await trimVideoFile(full, outputFull, startSeconds, endSeconds);
+      } else {
+        await stitchVideoSegments(full, outputFull, normalizedSegments, mode);
+      }
     }
 
     const trimmedUsable = await probeVideoFile(outputFull);
@@ -1686,6 +1924,7 @@ if (require.main === module) {
 module.exports = {
   app,
   buildTrimmedVideoName,
+  buildMultiSceneVideoName,
   formatTrimStamp,
   isTemporaryTrimFile,
   isTrimmedVideoName,
@@ -1694,6 +1933,7 @@ module.exports = {
   resolveFfmpegBin,
   resolveFfprobeBin,
   trimVideoFile,
+  stitchVideoSegments,
   safeVideoPath,
   isUsableVideoFile,
   probeVideoFile

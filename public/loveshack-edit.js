@@ -10,6 +10,13 @@ const el = {
   trimVideoSelect: document.getElementById('trimVideoSelect'),
   trimStart: document.getElementById('trimStart'),
   trimEnd: document.getElementById('trimEnd'),
+  trimEditMode: document.getElementById('trimEditMode'),
+  secondSceneFields: document.getElementById('secondSceneFields'),
+  trimSecondStart: document.getElementById('trimSecondStart'),
+  trimSecondEnd: document.getElementById('trimSecondEnd'),
+  trimSecondStartLabel: document.getElementById('trimSecondStartLabel'),
+  trimSecondEndLabel: document.getElementById('trimSecondEndLabel'),
+  trimSubmit: null,
   trimPlaylistSelect: document.getElementById('trimPlaylistSelect'),
   trimNewPlaylist: document.getElementById('trimNewPlaylist'),
   trimPreview: document.getElementById('trimPreview'),
@@ -17,6 +24,8 @@ const el = {
   trimStatus: document.getElementById('trimStatus'),
   trimPresetButtons: Array.from(document.querySelectorAll('.trim-preset'))
 };
+
+el.trimSubmit = el.trimForm.querySelector('button[type="submit"]');
 
 function setTrimStatus(message, kind = 'neutral') {
   const allowed = new Set(['neutral', 'success', 'error']);
@@ -141,6 +150,25 @@ function updateTrimRangeStatus() {
   );
 }
 
+function updateEditModeFields() {
+  const multiScene = el.trimEditMode.value !== 'single';
+  el.secondSceneFields.hidden = !multiScene;
+  const removing = el.trimEditMode.value === 'remove-scene';
+  el.trimSubmit.textContent = removing ? 'Remove scene and save' : multiScene ? 'Stitch scenes and save' : 'Save trimmed clip';
+  el.trimSecondStartLabel.textContent = removing ? 'Removal boundary start' : 'Second scene start';
+  el.trimSecondEndLabel.textContent = removing ? 'Removal boundary end' : 'Second scene end';
+  updateTrimRangeStatus();
+}
+
+function parseSceneRange(startInput, endInput) {
+  const start = parseTimeString(startInput);
+  const end = parseTimeString(endInput);
+  if (start === null || end === null || start >= end) {
+    return null;
+  }
+  return { start, end };
+}
+
 function previewSelectedVideo(videoName) {
   const video = state.videos.find((item) => item.name === videoName);
 
@@ -209,13 +237,36 @@ async function handleTrimSubmit(event) {
     return;
   }
 
+  const mode = el.trimEditMode.value;
+  let segments = null;
+  if (mode !== 'single') {
+    const first = parseSceneRange(start, end);
+    const second = parseSceneRange(el.trimSecondStart.value, el.trimSecondEnd.value);
+    if (!first || !second) {
+      setTrimStatus('Enter valid start and end times for both scenes.', 'error');
+      return;
+    }
+    if (second.start < first.end && first.start < second.end) {
+      setTrimStatus('The two scenes must not overlap.', 'error');
+      return;
+    }
+    if (state.currentDuration > 0 && second.end > state.currentDuration) {
+      setTrimStatus(
+        `Both scenes must stay within the video length of ${formatTimeLabel(state.currentDuration)}.`,
+        'error'
+      );
+      return;
+    }
+    segments = [first, second].sort((a, b) => a.start - b.start);
+  }
+
   try {
     const res = await fetch('/api/videos/trim', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ videoName, start, end, playlistName })
+      body: JSON.stringify({ videoName, start, end, playlistName, mode, segments })
     });
 
     const data = await res.json().catch(() => ({}));
@@ -275,6 +326,8 @@ el.refreshBtn.addEventListener('click', async () => {
 el.trimVideoSelect.addEventListener('change', (event) => {
   previewSelectedVideo(event.target.value);
 });
+
+el.trimEditMode.addEventListener('change', updateEditModeFields);
 
 el.trimPresetButtons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -344,3 +397,4 @@ el.trimEnd.addEventListener('input', () => {
 el.trimForm.addEventListener('submit', handleTrimSubmit);
 
 init();
+updateEditModeFields();
