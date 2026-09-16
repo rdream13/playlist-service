@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Love Shack Edit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/loveshack.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+
+    <main class="page edit-page">
+      <header class="hero">
+        <h1>Love Shack Edit</h1>
+        <p>Cut a video segment and save the trimmed clip into your favorites playlist.</p>
+      </header>
+
+      <section class="controls card">
+        <div class="control-row">
+          <a class="btn" href="/loveshack">Main</a>
+          <a class="btn" href="/loveshack-favorites">Favorites</a>
+          <button id="refreshTrimBtn" class="btn btn-primary" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="edit-layout">
+        <div class="player card edit-panel">
+          <h2>Trim Preview</h2>
+          <video id="trimPreview" controls preload="metadata"></video>
+          <p id="trimDuration" class="trim-meta">Duration: --:--:--</p>
+          <p id="trimStatus" class="status" aria-live="polite">Ready.</p>
+        </div>
+
+        <div class="list card edit-panel">
+          <h2>Cut & Save</h2>
+          <form id="trimForm" class="trim-form">
+            <label for="trimVideoSelect">Video</label>
+            <select id="trimVideoSelect" name="videoName" required>
+              <option value="">Choose a video...</option>
+            </select>
+
+            <div class="trim-time-grid">
+              <div>
+                <label for="trimStart">Start time</label>
+                <input id="trimStart" name="start" type="text" placeholder="00:00:00" value="00:00:00" />
+              </div>
+              <div>
+                <label for="trimEnd">End time</label>
+                <input id="trimEnd" name="end" type="text" placeholder="00:00:30" value="00:00:30" />
+              </div>
+            </div>
+
+            <div class="trim-presets">
+              <button class="btn tiny trim-preset" data-seconds="120" type="button">2 min</button>
+              <button class="btn tiny trim-preset" data-seconds="300" type="button">5 min</button>
+              <button class="btn tiny trim-preset" data-seconds="600" type="button">10 min</button>
+              <button class="btn tiny trim-preset" data-seconds="900" type="button">15 min</button>
+              <button class="btn tiny trim-preset" data-seconds="full" type="button">Full clip</button>
+            </div>
+
+            <label for="trimPlaylistSelect">Choose favorites playlist</label>
+            <select id="trimPlaylistSelect" name="playlistSelect">
+              <option value="">Choose existing playlist...</option>
+            </select>
+
+            <label for="trimNewPlaylist">Or create new favorites playlist</label>
+            <input
+              id="trimNewPlaylist"
+              name="newPlaylist"
+              type="text"
+              maxlength="80"
+              placeholder="ex: 2026-09-14"
+            />
+
+            <button class="btn btn-primary" type="submit">Save trimmed clip</button>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <script src="/assets/loveshack-edit.js" defer></script>
+  </body>
+</html>

@@ -24,6 +24,8 @@ const ALLOWED_EXTENSIONS = new Set([
 ]);
 const PLAYLIST_FILE = path.join(ROOT_DIR, 'playlist.json');
 const FAVORITES_FILE = path.join(ROOT_DIR, 'favorites-playlists.json');
+const LOG_DIR = path.join(ROOT_DIR, 'logs');
+const TRIM_DEBUG_LOG = path.join(LOG_DIR, 'trim-debug.log');
 const DOWNLOAD_JOBS = new Map(); // jobId -> job object
 const DOWNLOAD_QUEUE = [];
 const MAX_CONCURRENT_DOWNLOADS = Math.max(
@@ -31,6 +33,7 @@ const MAX_CONCURRENT_DOWNLOADS = Math.max(
   Number.parseInt(process.env.MAX_CONCURRENT_DOWNLOADS || '3', 10) || 3
 );
 let ACTIVE_DOWNLOADS = 0;
+const ACTIVE_TRIMS = new Set();
 
 function createDownloadJob(url) {
   const jobId = Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -116,6 +119,20 @@ function listJobInfos() {
 async function ensureDirectories() {
   await fsp.mkdir(VIDEOS_DIR, { recursive: true });
   await fsp.mkdir(PUBLIC_DIR, { recursive: true });
+  await fsp.mkdir(LOG_DIR, { recursive: true });
+}
+
+async function appendTrimDebugLog(entry) {
+  try {
+    await fsp.mkdir(LOG_DIR, { recursive: true });
+    const record = {
+      ts: new Date().toISOString(),
+      ...entry
+    };
+    await fsp.appendFile(TRIM_DEBUG_LOG, `${JSON.stringify(record)}\n`, 'utf8');
+  } catch {
+    // Best-effort logging only.
+  }
 }
 
 function isAllowedVideo(fileName) {
@@ -181,6 +198,32 @@ function resolveYtDlpBin(ytDlpPath) {
   return findWingetYtDlpBin() || 'yt-dlp';
 }
 
+function resolveFfmpegBin() {
+  if (process.env.FFMPEG_BIN) {
+    return process.env.FFMPEG_BIN;
+  }
+
+  const winDir = findWingetFfmpegDir();
+  if (winDir) {
+    return path.join(winDir, 'ffmpeg.exe');
+  }
+
+  return 'ffmpeg';
+}
+
+function resolveFfprobeBin() {
+  if (process.env.FFPROBE_BIN) {
+    return process.env.FFPROBE_BIN;
+  }
+
+  const winDir = findWingetFfmpegDir();
+  if (winDir) {
+    return path.join(winDir, 'ffprobe.exe');
+  }
+
+  return 'ffprobe';
+}
+
 function safeVideoPath(fileName) {
   const base = path.basename(fileName);
   const full = path.join(VIDEOS_DIR, base);
@@ -188,6 +231,294 @@ function safeVideoPath(fileName) {
     throw new Error('Invalid file path.');
   }
   return { base, full };
+}
+
+function isUsableVideoFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return false;
+    }
+
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile() || stats.size < 64) {
+      return false;
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const buffer = Buffer.alloc(64);
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const bytesRead = fs.readSync(fd, buffer, 0, 64, 0);
+      if (bytesRead < 8) {
+        return false;
+      }
+
+      const sig = buffer.slice(0, bytesRead).toString('ascii', 0, bytesRead);
+      if (ext === '.mp4' || ext === '.m4v' || ext === '.mov') {
+        return sig.includes('ftyp') && (stats.size > 4096 || sig.includes('moov') || sig.includes('mdat'));
+      }
+      if (ext === '.webm') {
+        return sig.startsWith('RIFF') && sig.includes('WEBM');
+      }
+      if (ext === '.ogg' || ext === '.ogv') {
+        return sig.startsWith('OggS');
+      }
+      if (ext === '.mkv') {
+        return sig.includes('matroska');
+      }
+      return true;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+function probeVideoFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const ffprobeBin = resolveFfprobeBin();
+    const child = spawn(ffprobeBin, ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type', '-of', 'json', filePath], { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', () => {
+      resolve(false);
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        resolve(false);
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(stdout || '{}');
+        const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
+        const duration = Number(parsed.format?.duration);
+        if (streams.length === 0) {
+          resolve(false);
+          return;
+        }
+
+        if (Number.isFinite(duration) && duration > 0) {
+          resolve(true);
+          return;
+        }
+
+        resolve(streams.some((stream) => stream.codec_type === 'video' || stream.codec_type === 'audio'));
+      } catch {
+        resolve(false);
+      }
+    });
+  });
+}
+
+function parseTimeToSeconds(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const raw = value.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const normalized = raw.replace(',', '.');
+  const parts = normalized.split(':').map((part) => Number.parseFloat(part));
+
+  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
+    return null;
+  }
+
+  if (parts.length === 1) {
+    return parts[0];
+  }
+
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+
+  return null;
+}
+
+function formatTrimStamp(seconds) {
+  const total = Math.max(0, Math.ceil(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+
+  return [hours, minutes, secs]
+    .map((value) => String(value).padStart(2, '0'))
+    .join('-');
+}
+
+function isTrimmedVideoName(fileName) {
+  const name = (fileName || '').trim();
+  return /\s\[trim\s+\d{2}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\]\.[a-z0-9]+$/i.test(name);
+}
+
+function isTemporaryTrimFile(fileName) {
+  const name = (fileName || '').trim();
+  return (
+    /\.tmp-\d+-\d+\.[a-z0-9]+$/i.test(name) ||
+    /\]\.tmp-\d+-\d+\.[a-z0-9]+$/i.test(name)
+  );
+}
+
+function buildTrimmedVideoName(fileName, startSeconds, endSeconds) {
+  const parsed = path.parse(fileName);
+  const stem = (parsed.name || 'video').trim();
+  const ext = parsed.ext || '.mp4';
+  const startStamp = formatTrimStamp(startSeconds);
+  const endStamp = formatTrimStamp(endSeconds);
+  const nextStem = `${stem} [trim ${startStamp}_${endStamp}]`;
+  return `${nextStem}${ext}`;
+}
+
+function removePartialTrimFile(targetPath) {
+  const candidates = new Set();
+
+  if (targetPath) {
+    candidates.add(targetPath);
+
+    try {
+      const parsed = path.parse(targetPath);
+      if (parsed.dir && parsed.name) {
+        const entries = fs.readdirSync(parsed.dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isFile()) continue;
+          const full = path.join(parsed.dir, entry.name);
+          const entryParsed = path.parse(entry.name);
+          if (
+            entryParsed.name.startsWith(parsed.name) &&
+            entryParsed.ext === parsed.ext &&
+            entry.name.includes('.tmp-')
+          ) {
+            candidates.add(full);
+          }
+        }
+      }
+    } catch {
+      // Ignore directory scan failures; the main target is always attempted first.
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (candidate && fs.existsSync(candidate)) {
+        fs.unlinkSync(candidate);
+      }
+    } catch {
+      // Ignore cleanup failures; the important part is not leaving a corrupt partial output behind.
+    }
+  }
+}
+
+async function trimVideoFile(sourcePath, targetPath, startSeconds, endSeconds) {
+  const ffmpegBin = resolveFfmpegBin();
+  const duration = Math.max(0.1, endSeconds - startSeconds);
+  const trimTimeoutMs = 2 * 60 * 1000;
+  const parsedTarget = path.parse(targetPath);
+  const tempTargetPath = path.join(
+    parsedTarget.dir,
+    `${parsedTarget.name}.tmp-${process.pid}-${Date.now()}${parsedTarget.ext || '.mp4'}`
+  );
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-y',
+      '-ss',
+      String(startSeconds),
+      '-i',
+      sourcePath,
+      '-t',
+      String(duration),
+      '-map',
+      '0:v:0',
+      '-map',
+      '0:a:0?',
+      '-c',
+      'copy',
+      '-sn',
+      '-dn',
+      '-avoid_negative_ts',
+      'make_zero',
+      tempTargetPath
+    ];
+
+    const child = spawn(ffmpegBin, args, { windowsHide: true });
+    let stderr = '';
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, trimTimeoutMs);
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      removePartialTrimFile(tempTargetPath);
+      const message = err && err.code === 'ENOENT'
+        ? `ffmpeg executable not found at ${ffmpegBin}. Install ffmpeg or set FFMPEG_BIN.`
+        : err && err.message
+          ? err.message
+          : 'ffmpeg trim failed.';
+      const wrapped = new Error(message);
+      wrapped.code = err && err.code ? err.code : 'FFMPEG_ERROR';
+      wrapped.stderr = stderr;
+      reject(wrapped);
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        removePartialTrimFile(tempTargetPath);
+        const err = new Error('ffmpeg trim timed out after 5 minutes.');
+        err.code = 'FFMPEG_TIMEOUT';
+        err.stderr = stderr;
+        reject(err);
+        return;
+      }
+
+      if (code === 0) {
+        try {
+          fs.renameSync(tempTargetPath, targetPath);
+          resolve();
+          return;
+        } catch (err) {
+          removePartialTrimFile(tempTargetPath);
+          reject(err);
+          return;
+        }
+      }
+
+      removePartialTrimFile(tempTargetPath);
+      const err = new Error(stderr.trim() || `ffmpeg trim failed with exit code ${code}.`);
+      err.code = code;
+      err.stderr = stderr;
+      reject(err);
+    });
+  });
 }
 
 async function loadPlaylistOrder() {
@@ -419,7 +750,12 @@ async function listVideos() {
       }
       return a.name.localeCompare(b.name);
     })
-    .filter((file) => !hiddenSet.has(file.name))
+    .filter((file) =>
+      !hiddenSet.has(file.name) &&
+      !isTrimmedVideoName(file.name) &&
+      !isTemporaryTrimFile(file.name) &&
+      isUsableVideoFile(path.join(VIDEOS_DIR, file.name))
+    )
     .map((file) => file.name);
 
   return ordered.map((name) => ({
@@ -455,6 +791,7 @@ async function listAllVideoFiles() {
       }
       return a.name.localeCompare(b.name);
     })
+    .filter((file) => !isTemporaryTrimFile(file.name) && isUsableVideoFile(path.join(VIDEOS_DIR, file.name)))
     .map((file) => ({
       name: file.name,
       url: `/media/${encodeURIComponent(file.name)}`
@@ -666,6 +1003,10 @@ app.get('/loveshack', (_req, res) => {
 
 app.get('/loveshack-favorites', (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'loveshack-favorites.html'));
+});
+
+app.get('/loveshack-edit', (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'loveshack-edit.html'));
 });
 
 app.get('/api/videos', async (_req, res) => {
@@ -910,6 +1251,31 @@ app.post('/api/favorites/add', async (req, res) => {
   }
 });
 
+app.delete('/api/favorites/playlists/:playlistName', async (req, res) => {
+  const playlistName = normalizePlaylistName(req.params.playlistName || '');
+
+  if (!playlistName) {
+    res.status(400).json({ error: 'playlistName is required.' });
+    return;
+  }
+
+  try {
+    const store = await loadFavoritesStore();
+    if (!store.playlists[playlistName]) {
+      res.status(404).json({ error: 'Favorites playlist not found.' });
+      return;
+    }
+
+    delete store.playlists[playlistName];
+    await saveFavoritesStore(store);
+
+    const data = await buildFavoritesResponse();
+    res.json({ message: 'Deleted favorites playlist.', ...data });
+  } catch {
+    res.status(500).json({ error: 'Could not delete favorites playlist.' });
+  }
+});
+
 app.delete('/api/favorites/playlists/:playlistName/videos/:videoName', async (req, res) => {
   const playlistName = normalizePlaylistName(req.params.playlistName || '');
   const videoName = path.basename(req.params.videoName || '');
@@ -1020,6 +1386,280 @@ app.post('/api/favorites/to-main', async (req, res) => {
   }
 });
 
+app.post('/api/videos/trim', async (req, res) => {
+  const { videoName, start, end, playlistName } = req.body || {};
+  const safePlaylistName = normalizePlaylistName(playlistName);
+  let base = null;
+  let full = null;
+  let outputName = null;
+  let outputFull = null;
+  let startSeconds = null;
+  let endSeconds = null;
+  let trimLockKey = null;
+
+  await appendTrimDebugLog({
+    stage: 'request_received',
+    videoName,
+    start,
+    end,
+    playlistName,
+    safePlaylistName
+  });
+
+  if (!videoName || !safePlaylistName || !start || !end) {
+    await appendTrimDebugLog({
+      stage: 'request_invalid',
+      reason: 'missing_required_fields',
+      videoName,
+      start,
+      end,
+      playlistName: safePlaylistName
+    });
+    res.status(400).json({ error: 'videoName, start, end, and playlistName are required.' });
+    return;
+  }
+
+  startSeconds = parseTimeToSeconds(start);
+  endSeconds = parseTimeToSeconds(end);
+
+  await appendTrimDebugLog({
+    stage: 'parsed_times',
+    startSeconds,
+    endSeconds,
+    start,
+    end
+  });
+
+  if (startSeconds === null || endSeconds === null) {
+    await appendTrimDebugLog({
+      stage: 'request_invalid',
+      reason: 'invalid_time_values',
+      start,
+      end,
+      startSeconds,
+      endSeconds
+    });
+    res.status(400).json({ error: 'start and end must be valid time values such as 00:15 or 01:02:30.' });
+    return;
+  }
+
+  if (startSeconds >= endSeconds) {
+    await appendTrimDebugLog({
+      stage: 'request_invalid',
+      reason: 'start_after_end',
+      startSeconds,
+      endSeconds
+    });
+    res.status(400).json({ error: 'Cut end time must be after the start time.' });
+    return;
+  }
+
+  try {
+    const resolved = safeVideoPath(videoName);
+    base = resolved.base;
+    full = resolved.full;
+
+    await appendTrimDebugLog({
+      stage: 'source_resolved',
+      base,
+      full,
+      exists: fs.existsSync(full)
+    });
+
+    if (!isAllowedVideo(base)) {
+      await appendTrimDebugLog({
+        stage: 'request_invalid',
+        reason: 'unsupported_extension',
+        base
+      });
+      res.status(400).json({ error: 'Unsupported file type.' });
+      return;
+    }
+
+    if (isTrimmedVideoName(base)) {
+      await appendTrimDebugLog({
+        stage: 'request_invalid',
+        reason: 'already_trimmed_clip',
+        base
+      });
+      res.status(400).json({ error: 'Please choose an original video, not an already-trimmed clip.' });
+      return;
+    }
+
+    if (!fs.existsSync(full)) {
+      await appendTrimDebugLog({
+        stage: 'request_invalid',
+        reason: 'video_not_found',
+        full
+      });
+      res.status(404).json({ error: 'Video not found.' });
+      return;
+    }
+
+    outputName = buildTrimmedVideoName(base, startSeconds, endSeconds);
+    outputFull = path.join(VIDEOS_DIR, outputName);
+    trimLockKey = outputFull.toLowerCase();
+
+    if (ACTIVE_TRIMS.has(trimLockKey)) {
+      await appendTrimDebugLog({
+        stage: 'trim_rejected',
+        reason: 'duplicate_trim_in_progress',
+        outputName,
+        outputFull
+      });
+      res.status(409).json({ error: 'This trim is already in progress. Wait for it to finish.' });
+      return;
+    }
+
+    ACTIVE_TRIMS.add(trimLockKey);
+    await appendTrimDebugLog({
+      stage: 'trim_started',
+      outputName,
+      outputFull,
+      ffmpeg: resolveFfmpegBin(),
+      startSeconds,
+      endSeconds
+    });
+
+    const sourceUsable = isUsableVideoFile(full) || (await probeVideoFile(full));
+    await appendTrimDebugLog({
+      stage: 'trim_target_ready',
+      outputName,
+      outputFull,
+      sourceUsable,
+      outputExists: fs.existsSync(outputFull),
+      outputUsable: fs.existsSync(outputFull) ? (isUsableVideoFile(outputFull) || (await probeVideoFile(outputFull))) : false
+    });
+
+    if (!sourceUsable) {
+      await appendTrimDebugLog({
+        stage: 'request_invalid',
+        reason: 'source_not_usable',
+        full,
+        sourceUsable
+      });
+      res.status(400).json({ error: 'Source video is missing or not a valid media file.' });
+      return;
+    }
+
+    const outputUsableBefore = fs.existsSync(outputFull) ? (isUsableVideoFile(outputFull) || (await probeVideoFile(outputFull))) : false;
+
+    if (fs.existsSync(outputFull) && outputUsableBefore) {
+      await appendTrimDebugLog({
+        stage: 'reusing_existing_trim',
+        reason: 'output_already_exists_and_usable',
+        outputName,
+        outputFull
+      });
+    } else if (fs.existsSync(outputFull) && !outputUsableBefore) {
+      await appendTrimDebugLog({
+        stage: 'cleanup_partial_output',
+        outputName,
+        outputFull
+      });
+      removePartialTrimFile(outputFull);
+
+      await appendTrimDebugLog({
+        stage: 'calling_ffmpeg',
+        source: full,
+        output: outputFull,
+        startSeconds,
+        endSeconds
+      });
+
+      await trimVideoFile(full, outputFull, startSeconds, endSeconds);
+    } else {
+      await appendTrimDebugLog({
+        stage: 'calling_ffmpeg',
+        source: full,
+        output: outputFull,
+        startSeconds,
+        endSeconds
+      });
+
+      await trimVideoFile(full, outputFull, startSeconds, endSeconds);
+    }
+
+    const trimmedUsable = await probeVideoFile(outputFull);
+    await appendTrimDebugLog({
+      stage: 'post_trim_validation',
+      outputFull,
+      trimmedUsable,
+      outputExists: fs.existsSync(outputFull),
+      outputSize: fs.existsSync(outputFull) ? fs.statSync(outputFull).size : 0
+    });
+
+    if (!trimmedUsable) {
+      throw new Error('Trim output was created but is not a valid media file.');
+    }
+
+    await removeFromMainPlaylistOnly(outputName);
+
+    const store = await loadFavoritesStore();
+    const now = new Date().toISOString();
+    if (!store.playlists[safePlaylistName]) {
+      store.playlists[safePlaylistName] = {
+        createdAt: now,
+        updatedAt: now,
+        items: []
+      };
+    }
+
+    const playlist = store.playlists[safePlaylistName];
+    if (!playlist.items.includes(outputName)) {
+      playlist.items.push(outputName);
+      playlist.updatedAt = now;
+    }
+
+    await saveFavoritesStore(store);
+    const data = await buildFavoritesResponse();
+
+    await appendTrimDebugLog({
+      stage: 'saved_to_favorites',
+      playlistName: safePlaylistName,
+      outputName,
+      playlistItemsCount: playlist.items.length,
+      favoritesResponsePlaylists: data.playlists.map((p) => p.name)
+    });
+
+    res.status(201).json({
+      message: 'Trimmed clip saved to favorites playlist.',
+      videoName: outputName,
+      playlistName: safePlaylistName,
+      ...data
+    });
+  } catch (err) {
+    const partialTarget = outputFull || path.join(VIDEOS_DIR, buildTrimmedVideoName(base || videoName, startSeconds ?? 0, endSeconds ?? 0));
+    removePartialTrimFile(partialTarget);
+    const message = err && err.stderr
+      ? String(err.stderr).trim() || 'Could not trim video.'
+      : err && err.message
+        ? err.message
+        : 'Could not trim video.';
+
+    await appendTrimDebugLog({
+      stage: 'trim_failed',
+      reason: 'exception_thrown',
+      videoName,
+      base,
+      full,
+      outputName,
+      outputFull,
+      startSeconds,
+      endSeconds,
+      playlistName: safePlaylistName,
+      errorMessage: message,
+      errorStack: err && err.stack ? err.stack : null
+    });
+
+    res.status(500).json({ error: message });
+  } finally {
+    if (trimLockKey) {
+      ACTIVE_TRIMS.delete(trimLockKey);
+    }
+  }
+});
+
 app.post('/api/videos/move', async (req, res) => {
   res.status(400).json({
     error: 'Manual move is disabled. Videos are auto-sorted by download date.'
@@ -1030,13 +1670,31 @@ app.get('/', (_req, res) => {
   res.redirect('/loveshack');
 });
 
-ensureDirectories()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Playlist service running at http://localhost:${PORT}/loveshack`);
+if (require.main === module) {
+  ensureDirectories()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`Playlist service running at http://localhost:${PORT}/loveshack`);
+      });
+    })
+    .catch((err) => {
+      console.error('Failed to initialize directories:', err);
+      process.exit(1);
     });
-  })
-  .catch((err) => {
-    console.error('Failed to initialize directories:', err);
-    process.exit(1);
-  });
+}
+
+module.exports = {
+  app,
+  buildTrimmedVideoName,
+  formatTrimStamp,
+  isTemporaryTrimFile,
+  isTrimmedVideoName,
+  parseTimeToSeconds,
+  removePartialTrimFile,
+  resolveFfmpegBin,
+  resolveFfprobeBin,
+  trimVideoFile,
+  safeVideoPath,
+  isUsableVideoFile,
+  probeVideoFile
+};

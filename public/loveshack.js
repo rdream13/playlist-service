@@ -198,6 +198,11 @@ function renderList() {
       playVideoByName(video.name);
     });
 
+    node.querySelector('.edit').addEventListener('click', () => {
+      const target = new URL(`/loveshack-edit?video=${encodeURIComponent(video.name)}`, window.location.origin);
+      window.location.href = target.toString();
+    });
+
     node.querySelector('.favorite').addEventListener('click', () => {
       openFavoriteDialog(video.name).catch((err) => {
         el.status.textContent = err.message;

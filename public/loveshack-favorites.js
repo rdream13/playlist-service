@@ -52,9 +52,7 @@ function shuffleArray(items) {
   return shuffled;
 }
 
-function startPlaylistPlayback(playlist, options = {}) {
-  const { shuffled = false } = options;
-
+function startPlaylistPlayback(playlist, shuffled = false) {
   if (!playlist || !Array.isArray(playlist.items) || !playlist.items.length) {
     el.status.textContent = 'No videos in this playlist to play.';
     return;
@@ -67,8 +65,12 @@ function startPlaylistPlayback(playlist, options = {}) {
 
   playFavorite(state.playQueue[state.playingIndex]);
   el.status.textContent = shuffled
-    ? `Shuffled playlist ${playlist.name}.`
+    ? `Shuffle & Play All started for ${playlist.name}.`
     : `Playing playlist ${playlist.name}.`;
+}
+
+function shuffleAndPlayAll(playlist) {
+  startPlaylistPlayback(playlist, true);
 }
 
 function skipInFavoritesPlaylist(direction) {
@@ -131,6 +133,25 @@ async function moveVideoInPlaylist(playlistName, videoName, direction) {
   state.playlists = data.playlists || [];
 }
 
+async function deletePlaylist(playlistName) {
+  if (!confirm(`Delete the entire playlist "${playlistName}"?`)) {
+    return;
+  }
+
+  const res = await fetch(`/api/favorites/playlists/${encodeURIComponent(playlistName)}`, {
+    method: 'DELETE'
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to delete favorites playlist.');
+  }
+
+  state.playlists = data.playlists || [];
+  renderPlaylists();
+  el.status.textContent = `Deleted playlist ${playlistName}.`;
+}
+
 async function sendVideoToMainPlaylist(videoName) {
   const res = await fetch('/api/favorites/to-main', {
     method: 'POST',
@@ -178,9 +199,21 @@ function renderPlaylists() {
     const shufflePlaylistBtn = document.createElement('button');
     shufflePlaylistBtn.className = 'btn tiny';
     shufflePlaylistBtn.type = 'button';
-    shufflePlaylistBtn.textContent = 'Shuffle';
+    shufflePlaylistBtn.textContent = 'Shuffle & Play All';
     shufflePlaylistBtn.addEventListener('click', () => {
-      startPlaylistPlayback(playlist, { shuffled: true });
+      shuffleAndPlayAll(playlist);
+    });
+
+    const deletePlaylistBtn = document.createElement('button');
+    deletePlaylistBtn.className = 'btn tiny danger';
+    deletePlaylistBtn.type = 'button';
+    deletePlaylistBtn.textContent = 'Delete Playlist';
+    deletePlaylistBtn.addEventListener('click', async () => {
+      try {
+        await deletePlaylist(playlist.name);
+      } catch (err) {
+        el.status.textContent = err.message;
+      }
     });
 
     const meta = document.createElement('p');
@@ -253,6 +286,7 @@ function renderPlaylists() {
     header.appendChild(title);
     header.appendChild(playPlaylistBtn);
     header.appendChild(shufflePlaylistBtn);
+    header.appendChild(deletePlaylistBtn);
     group.appendChild(header);
     group.appendChild(meta);
     group.appendChild(list);
