@@ -383,32 +383,21 @@ el.trimPresetButtons.forEach((button) => {
 
 el.trimStart.addEventListener('input', () => {
   const start = parseTimeString(el.trimStart.value);
-  const end = parseTimeString(el.trimEnd.value);
   const duration = state.currentDuration || 0;
 
   if (start !== null && duration > 0 && start > duration) {
     el.trimStart.value = formatTimeLabel(duration);
   }
 
-  if (start !== null && end !== null && start >= end) {
-    const fallbackEnd = Math.min(duration || end, Math.max(end, start + 1));
-    el.trimEnd.value = formatTimeLabel(Math.max(1, fallbackEnd));
-  }
-
   updateTrimRangeStatus();
 });
 
 el.trimEnd.addEventListener('input', () => {
-  const start = parseTimeString(el.trimStart.value);
   const end = parseTimeString(el.trimEnd.value);
   const duration = state.currentDuration || 0;
 
   if (end !== null && duration > 0 && end > duration) {
     el.trimEnd.value = formatTimeLabel(duration);
-  }
-
-  if (start !== null && end !== null && start >= end) {
-    el.trimStart.value = formatTimeLabel(Math.max(0, end - 1));
   }
 
   updateTrimRangeStatus();
