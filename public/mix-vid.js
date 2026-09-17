@@ -6,7 +6,12 @@ const el = {
   refreshBtn: document.getElementById('refreshMixBtn'),
   mixForm: document.getElementById('mixForm'),
   mixPlaylistSelect: document.getElementById('mixPlaylistSelect'),
-  mixClipLength: document.getElementById('mixClipLength'),
+  mixIncludeBegin: document.getElementById('mixIncludeBegin'),
+  mixIncludeMiddle: document.getElementById('mixIncludeMiddle'),
+  mixIncludeEnd: document.getElementById('mixIncludeEnd'),
+  mixBeginClipLength: document.getElementById('mixBeginClipLength'),
+  mixMiddleClipLength: document.getElementById('mixMiddleClipLength'),
+  mixEndClipLength: document.getElementById('mixEndClipLength'),
   mixTotalLength: document.getElementById('mixTotalLength'),
   mixArrangement: document.getElementById('mixArrangement'),
   mixRandomOrder: document.getElementById('mixRandomOrder'),
@@ -91,18 +96,39 @@ async function handleMixSubmit(event) {
   event.preventDefault();
 
   const playlistSource = el.mixPlaylistSelect.value;
-  const clipSeconds = parseTimeString(el.mixClipLength.value);
-  const totalSeconds = parseTimeString(el.mixTotalLength.value);
   const arrangement = el.mixArrangement.value;
   const mixedOrder = el.mixRandomOrder.checked;
 
-  if (!playlistSource) {
-    setMixStatus('Choose a playlist first.', 'error');
+  const positions = [];
+  if (el.mixIncludeBegin.checked) positions.push('begin');
+  if (el.mixIncludeMiddle.checked) positions.push('middle');
+  if (el.mixIncludeEnd.checked) positions.push('end');
+
+  if (positions.length === 0) {
+    setMixStatus('Select at least one clip position (begin, middle, or end).', 'error');
     return;
   }
 
-  if (clipSeconds === null || clipSeconds <= 0) {
-    setMixStatus('Enter a valid clip length such as 00:00:05.', 'error');
+  const clipLengthInputs = {
+    begin: el.mixBeginClipLength,
+    middle: el.mixMiddleClipLength,
+    end: el.mixEndClipLength
+  };
+
+  const clipSecondsByPosition = {};
+  for (const position of positions) {
+    const seconds = parseTimeString(clipLengthInputs[position].value);
+    if (seconds === null || seconds <= 0) {
+      setMixStatus(`Enter a valid ${position} clip length such as 00:00:05.`, 'error');
+      return;
+    }
+    clipSecondsByPosition[position] = seconds;
+  }
+
+  const totalSeconds = parseTimeString(el.mixTotalLength.value);
+
+  if (!playlistSource) {
+    setMixStatus('Choose a playlist first.', 'error');
     return;
   }
 
@@ -120,7 +146,16 @@ async function handleMixSubmit(event) {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ playlistSource, clipSeconds, totalSeconds, arrangement, mixedOrder })
+      body: JSON.stringify({
+        playlistSource,
+        beginSeconds: clipSecondsByPosition.begin,
+        middleSeconds: clipSecondsByPosition.middle,
+        endSeconds: clipSecondsByPosition.end,
+        positions,
+        totalSeconds,
+        arrangement,
+        mixedOrder
+      })
     });
 
     const data = await res.json().catch(() => ({}));

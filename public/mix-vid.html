@@ -46,11 +46,38 @@
               <option value="">Choose a playlist...</option>
             </select>
 
+            <label>Clip positions to include</label>
+            <div class="trim-time-grid">
+              <label class="inline-checkbox" for="mixIncludeBegin">
+                <input id="mixIncludeBegin" name="includeBegin" type="checkbox" checked />
+                Begin
+              </label>
+              <label class="inline-checkbox" for="mixIncludeMiddle">
+                <input id="mixIncludeMiddle" name="includeMiddle" type="checkbox" checked />
+                Middle
+              </label>
+              <label class="inline-checkbox" for="mixIncludeEnd">
+                <input id="mixIncludeEnd" name="includeEnd" type="checkbox" checked />
+                End
+              </label>
+            </div>
+
             <div class="trim-time-grid">
               <div>
-                <label for="mixClipLength">Clip length</label>
-                <input id="mixClipLength" name="clipLength" type="text" placeholder="00:00:05" value="00:00:05" />
+                <label for="mixBeginClipLength">Begin clip length</label>
+                <input id="mixBeginClipLength" name="beginClipLength" type="text" placeholder="00:00:05" value="00:00:05" />
               </div>
+              <div>
+                <label for="mixMiddleClipLength">Middle clip length</label>
+                <input id="mixMiddleClipLength" name="middleClipLength" type="text" placeholder="00:00:05" value="00:00:05" />
+              </div>
+              <div>
+                <label for="mixEndClipLength">End clip length</label>
+                <input id="mixEndClipLength" name="endClipLength" type="text" placeholder="00:00:05" value="00:00:05" />
+              </div>
+            </div>
+
+            <div class="trim-time-grid">
               <div>
                 <label for="mixTotalLength">Total mix length</label>
                 <input id="mixTotalLength" name="totalLength" type="text" placeholder="00:02:00" value="00:02:00" />

@@ -38,14 +38,34 @@ test('time parsing accepts standard HH:MM:SS values', () => {
 });
 
 test('computeVideoSegments returns a single full segment for short videos', () => {
-  assert.deepEqual(server.computeVideoSegments(3, 5), [{ position: 'begin', start: 0, end: 3 }]);
+  assert.deepEqual(
+    server.computeVideoSegments(3, { begin: 5, middle: 5, end: 5 }),
+    [{ position: 'begin', start: 0, end: 3 }]
+  );
 });
 
 test('computeVideoSegments splits longer videos into begin, middle, end', () => {
-  const segments = server.computeVideoSegments(30, 5);
+  const segments = server.computeVideoSegments(30, { begin: 5, middle: 5, end: 5 });
   assert.deepEqual(segments, [
     { position: 'begin', start: 0, end: 5 },
     { position: 'middle', start: 12.5, end: 17.5 },
+    { position: 'end', start: 25, end: 30 }
+  ]);
+});
+
+test('computeVideoSegments supports independent per-position clip lengths', () => {
+  const segments = server.computeVideoSegments(100, { begin: 10, middle: 20, end: 5 });
+  assert.deepEqual(segments, [
+    { position: 'begin', start: 0, end: 10 },
+    { position: 'middle', start: 40, end: 60 },
+    { position: 'end', start: 95, end: 100 }
+  ]);
+});
+
+test('computeVideoSegments only includes enabled positions', () => {
+  const segments = server.computeVideoSegments(30, { begin: 5, middle: 5, end: 5 }, ['begin', 'end']);
+  assert.deepEqual(segments, [
+    { position: 'begin', start: 0, end: 5 },
     { position: 'end', start: 25, end: 30 }
   ]);
 });
@@ -56,7 +76,9 @@ test('buildMixPlan in linear mode keeps each video\'s clips together in order', 
     { name: 'b.mp4', duration: 30 }
   ];
   const plan = server.buildMixPlan(videos, {
-    clipSeconds: 5,
+    beginSeconds: 5,
+    middleSeconds: 5,
+    endSeconds: 5,
     totalSeconds: 1000,
     arrangement: 'linear',
     mixedOrder: false
@@ -70,7 +92,9 @@ test('buildMixPlan in mixed mode groups clips by position across videos', () => 
     { name: 'b.mp4', duration: 30 }
   ];
   const plan = server.buildMixPlan(videos, {
-    clipSeconds: 5,
+    beginSeconds: 5,
+    middleSeconds: 5,
+    endSeconds: 5,
     totalSeconds: 1000,
     arrangement: 'mixed',
     mixedOrder: false
@@ -81,7 +105,9 @@ test('buildMixPlan in mixed mode groups clips by position across videos', () => 
 test('buildMixPlan trims the final clip to fit the requested total length', () => {
   const videos = [{ name: 'a.mp4', duration: 30 }];
   const plan = server.buildMixPlan(videos, {
-    clipSeconds: 5,
+    beginSeconds: 5,
+    middleSeconds: 5,
+    endSeconds: 5,
     totalSeconds: 7,
     arrangement: 'linear',
     mixedOrder: false
@@ -94,12 +120,28 @@ test('buildMixPlan trims the final clip to fit the requested total length', () =
 test('buildMixPlan includes whole short videos without worrying about linear/mixed split', () => {
   const videos = [{ name: 'short.mp4', duration: 2 }];
   const plan = server.buildMixPlan(videos, {
-    clipSeconds: 5,
+    beginSeconds: 5,
+    middleSeconds: 5,
+    endSeconds: 5,
     totalSeconds: 10,
     arrangement: 'mixed',
     mixedOrder: false
   });
   assert.deepEqual(plan, [{ videoName: 'short.mp4', start: 0, end: 2 }]);
+});
+
+test('buildMixPlan only includes selected clip positions', () => {
+  const videos = [{ name: 'a.mp4', duration: 30 }];
+  const plan = server.buildMixPlan(videos, {
+    beginSeconds: 5,
+    middleSeconds: 5,
+    endSeconds: 5,
+    positions: ['middle'],
+    totalSeconds: 1000,
+    arrangement: 'linear',
+    mixedOrder: false
+  });
+  assert.deepEqual(plan, [{ videoName: 'a.mp4', start: 12.5, end: 17.5 }]);
 });
 
 test('buildMixVideoName produces a mix-${date} style name', () => {
