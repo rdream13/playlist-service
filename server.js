@@ -956,7 +956,7 @@ function normalizePlaylistName(name) {
 }
 
 function defaultFavoritesStore() {
-  return { playlists: {} };
+  return { playlists: Object.create(null) };
 }
 
 function normalizePlaylistRecord(record) {
@@ -984,7 +984,7 @@ async function loadFavoritesStore() {
       ? parsed.playlists
       : {};
 
-    const normalizedPlaylists = {};
+    const normalizedPlaylists = Object.create(null);
     for (const [name, value] of Object.entries(playlists)) {
       const safeName = normalizePlaylistName(name);
       if (!safeName) {
