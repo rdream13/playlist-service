@@ -96,6 +96,41 @@ test('computeVideoSegments only includes enabled positions', () => {
   assertCloseTo(segments[1].end - segments[1].start, 5);
 });
 
+test('computeVideoSegments adds a real end segment when the end clip does not reach the true end', () => {
+  const segments = server.computeVideoSegments(
+    100,
+    { begin: 5, middle: 5 },
+    ['begin', 'middle'],
+    { enabled: true, seconds: 5 }
+  );
+  const realEnd = segments.find((seg) => seg.position === 'realEnd');
+  assert.ok(realEnd, 'expected a realEnd segment to be added');
+  assertCloseTo(realEnd.end - realEnd.start, 5);
+  assert.equal(realEnd.end, 100);
+  assert.equal(realEnd.start, 95);
+});
+
+test('computeVideoSegments skips the real end segment when the end clip already reaches the true end', () => {
+  const segments = server.computeVideoSegments(
+    30,
+    { begin: 5, middle: 5, end: 10 },
+    ['begin', 'middle', 'end'],
+    { enabled: true, seconds: 5 }
+  );
+  const endSegment = segments.find((seg) => seg.position === 'end');
+  assert.equal(endSegment.end, 30);
+  const realEnd = segments.find((seg) => seg.position === 'realEnd');
+  assert.equal(realEnd, undefined);
+});
+
+test('computeVideoSegments ignores the real end option when disabled or no length given', () => {
+  const segments = server.computeVideoSegments(100, { begin: 5 }, ['begin'], { enabled: false, seconds: 5 });
+  assert.equal(segments.find((seg) => seg.position === 'realEnd'), undefined);
+
+  const segmentsNoLength = server.computeVideoSegments(100, { begin: 5 }, ['begin'], { enabled: true, seconds: 0 });
+  assert.equal(segmentsNoLength.find((seg) => seg.position === 'realEnd'), undefined);
+});
+
 test('buildMixPlan in linear mode keeps each video\'s clips together in order', () => {
   const videos = [
     { name: 'a.mp4', duration: 30 },
@@ -171,6 +206,40 @@ test('buildMixPlan only includes selected clip positions', () => {
   assert.equal(plan[0].videoName, 'a.mp4');
   assert.ok(Math.abs((plan[0].end - plan[0].start) - 5) < 1e-6);
   assert.ok(plan[0].start >= 10 && plan[0].end <= 20);
+});
+
+test('buildMixPlan stitches in the real end clip after the end clip when requested', () => {
+  const videos = [{ name: 'a.mp4', duration: 100 }];
+  const plan = server.buildMixPlan(videos, {
+    beginSeconds: 5,
+    middleSeconds: 5,
+    positions: ['begin', 'middle'],
+    totalSeconds: 1000,
+    arrangement: 'linear',
+    mixedOrder: false,
+    includeRealEnd: true,
+    realEndSeconds: 5
+  });
+  assert.equal(plan.length, 3);
+  assert.equal(plan[2].videoName, 'a.mp4');
+  assert.equal(plan[2].start, 95);
+  assert.equal(plan[2].end, 100);
+});
+
+test('buildMixPlan omits the real end clip when the end clip already covers it', () => {
+  const videos = [{ name: 'a.mp4', duration: 30 }];
+  const plan = server.buildMixPlan(videos, {
+    beginSeconds: 5,
+    middleSeconds: 5,
+    endSeconds: 10,
+    positions: ['begin', 'middle', 'end'],
+    totalSeconds: 1000,
+    arrangement: 'linear',
+    mixedOrder: false,
+    includeRealEnd: true,
+    realEndSeconds: 5
+  });
+  assert.equal(plan.length, 3);
 });
 
 test('buildMixVideoName produces a mix-${date} style name', () => {

@@ -12,6 +12,8 @@ const el = {
   mixBeginClipLength: document.getElementById('mixBeginClipLength'),
   mixMiddleClipLength: document.getElementById('mixMiddleClipLength'),
   mixEndClipLength: document.getElementById('mixEndClipLength'),
+  mixIncludeRealEnd: document.getElementById('mixIncludeRealEnd'),
+  mixRealEndClipLength: document.getElementById('mixRealEndClipLength'),
   mixTotalLength: document.getElementById('mixTotalLength'),
   mixArrangement: document.getElementById('mixArrangement'),
   mixRandomOrder: document.getElementById('mixRandomOrder'),
@@ -104,8 +106,10 @@ async function handleMixSubmit(event) {
   if (el.mixIncludeMiddle.checked) positions.push('middle');
   if (el.mixIncludeEnd.checked) positions.push('end');
 
-  if (positions.length === 0) {
-    setMixStatus('Select at least one clip position (begin, middle, or end).', 'error');
+  const includeRealEnd = el.mixIncludeRealEnd.checked;
+
+  if (positions.length === 0 && !includeRealEnd) {
+    setMixStatus('Select at least one clip position (begin, middle, end, or real end).', 'error');
     return;
   }
 
@@ -123,6 +127,15 @@ async function handleMixSubmit(event) {
       return;
     }
     clipSecondsByPosition[position] = seconds;
+  }
+
+  let realEndSeconds = null;
+  if (includeRealEnd) {
+    realEndSeconds = parseTimeString(el.mixRealEndClipLength.value);
+    if (realEndSeconds === null || realEndSeconds <= 0) {
+      setMixStatus('Enter a valid real end clip length such as 00:00:05.', 'error');
+      return;
+    }
   }
 
   const totalSeconds = parseTimeString(el.mixTotalLength.value);
@@ -154,7 +167,9 @@ async function handleMixSubmit(event) {
         positions,
         totalSeconds,
         arrangement,
-        mixedOrder
+        mixedOrder,
+        includeRealEnd,
+        realEndSeconds
       })
     });
 

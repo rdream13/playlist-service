@@ -77,6 +77,18 @@
               </div>
             </div>
 
+            <label class="inline-checkbox" for="mixIncludeRealEnd">
+              <input id="mixIncludeRealEnd" name="includeRealEnd" type="checkbox" />
+              Include real end (adds the true tail of the video as a 4th scene, stitched in after End, only if the End clip doesn't already reach it)
+            </label>
+
+            <div class="trim-time-grid">
+              <div>
+                <label for="mixRealEndClipLength">Real end clip length</label>
+                <input id="mixRealEndClipLength" name="realEndClipLength" type="text" placeholder="00:00:05" value="00:00:05" />
+              </div>
+            </div>
+
             <div class="trim-time-grid">
               <div>
                 <label for="mixTotalLength">Total mix length</label>

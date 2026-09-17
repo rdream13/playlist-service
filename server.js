@@ -699,7 +699,12 @@ async function stitchVideoSegments(sourcePath, targetPath, segments, mode) {
 
 const MIX_POSITIONS = ['begin', 'middle', 'end'];
 
-function computeVideoSegments(duration, lengths, positions) {
+// If the "end" clip doesn't already reach within this fraction of the true end of the
+// video, the optional "real end" clip is eligible to be stitched in as an independent
+// 4th scene covering the actual tail of the video (roughly the last 10%-15%).
+const REAL_END_THRESHOLD_RATIO = 0.125;
+
+function computeVideoSegments(duration, lengths, positions, realEnd) {
   if (!Number.isFinite(duration) || duration <= 0) {
     return [];
   }
@@ -711,13 +716,17 @@ function computeVideoSegments(duration, lengths, positions) {
     .map((position) => lengths?.[position])
     .filter((value) => Number.isFinite(value) && value > 0);
 
-  if (validLengths.length === 0) {
+  const realEndEnabled = Boolean(realEnd?.enabled) && Number.isFinite(realEnd?.seconds) && realEnd.seconds > 0;
+
+  if (validLengths.length === 0 && !realEndEnabled) {
     return [];
   }
 
-  const maxLength = Math.max(...validLengths);
-  if (duration <= maxLength) {
-    return [{ position: 'begin', start: 0, end: duration }];
+  if (validLengths.length > 0) {
+    const maxLength = Math.max(...validLengths);
+    if (duration <= maxLength) {
+      return [{ position: 'begin', start: 0, end: duration }];
+    }
   }
 
   const third = duration / 3;
@@ -751,6 +760,17 @@ function computeVideoSegments(duration, lengths, positions) {
     segments.push({ position, start, end: start + length });
   });
 
+  if (realEndEnabled) {
+    const endSegment = segments.find((segment) => segment.position === 'end');
+    const endCoverageEnd = endSegment ? endSegment.end : 0;
+    const thresholdStart = duration * (1 - REAL_END_THRESHOLD_RATIO);
+
+    if (endCoverageEnd < thresholdStart) {
+      const realEndLength = Math.min(realEnd.seconds, duration);
+      segments.push({ position: 'realEnd', start: Math.max(0, duration - realEndLength), end: duration });
+    }
+  }
+
   return segments;
 }
 
@@ -763,19 +783,32 @@ function shuffleClips(clips) {
   return shuffled;
 }
 
-function buildMixPlan(videos, { beginSeconds, middleSeconds, endSeconds, positions, totalSeconds, arrangement, mixedOrder }) {
+const ALL_MIX_SEGMENT_POSITIONS = [...MIX_POSITIONS, 'realEnd'];
+
+function buildMixPlan(videos, {
+  beginSeconds,
+  middleSeconds,
+  endSeconds,
+  positions,
+  totalSeconds,
+  arrangement,
+  mixedOrder,
+  includeRealEnd,
+  realEndSeconds
+}) {
   const lengths = { begin: beginSeconds, middle: middleSeconds, end: endSeconds };
+  const realEnd = { enabled: Boolean(includeRealEnd), seconds: realEndSeconds };
   const perVideoSegments = (videos || [])
     .filter((video) => Number.isFinite(video?.duration) && video.duration > 0)
     .map((video) => ({
       name: video.name,
-      segments: computeVideoSegments(video.duration, lengths, positions)
+      segments: computeVideoSegments(video.duration, lengths, positions, realEnd)
     }));
 
   let clips = [];
 
   if (arrangement === 'mixed') {
-    MIX_POSITIONS.forEach((position) => {
+    ALL_MIX_SEGMENT_POSITIONS.forEach((position) => {
       perVideoSegments.forEach((video) => {
         const segment = video.segments.find((seg) => seg.position === position);
         if (segment) {
@@ -2247,10 +2280,14 @@ app.post('/api/videos/mix', async (req, res) => {
     positions,
     totalSeconds,
     arrangement,
-    mixedOrder
+    mixedOrder,
+    includeRealEnd,
+    realEndSeconds
   } = req.body || {};
   const safeArrangement = arrangement === 'mixed' ? 'mixed' : 'linear';
   const totalSecondsNum = Number(totalSeconds);
+  const safeIncludeRealEnd = Boolean(includeRealEnd);
+  const realEndSecondsNum = Number(realEndSeconds);
 
   const safePositions = Array.isArray(positions)
     ? positions.filter((position) => MIX_POSITIONS.includes(position))
@@ -2261,8 +2298,8 @@ app.post('/api/videos/mix', async (req, res) => {
     return;
   }
 
-  if (safePositions.length === 0) {
-    res.status(400).json({ error: 'Select at least one clip position (begin, middle, or end).' });
+  if (safePositions.length === 0 && !safeIncludeRealEnd) {
+    res.status(400).json({ error: 'Select at least one clip position (begin, middle, end, or real end).' });
     return;
   }
 
@@ -2277,6 +2314,11 @@ app.post('/api/videos/mix', async (req, res) => {
       res.status(400).json({ error: `${position} clip length must be a positive number.` });
       return;
     }
+  }
+
+  if (safeIncludeRealEnd && (!Number.isFinite(realEndSecondsNum) || realEndSecondsNum <= 0)) {
+    res.status(400).json({ error: 'Real end clip length must be a positive number.' });
+    return;
   }
 
   if (!Number.isFinite(totalSecondsNum) || totalSecondsNum <= 0) {
@@ -2319,7 +2361,9 @@ app.post('/api/videos/mix', async (req, res) => {
       positions: safePositions,
       totalSeconds: totalSecondsNum,
       arrangement: safeArrangement,
-      mixedOrder: Boolean(mixedOrder)
+      mixedOrder: Boolean(mixedOrder),
+      includeRealEnd: safeIncludeRealEnd,
+      realEndSeconds: realEndSecondsNum
     });
 
     if (plan.length === 0) {
