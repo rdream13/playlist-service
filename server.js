@@ -34,6 +34,8 @@ const MAX_CONCURRENT_DOWNLOADS = Math.max(
 );
 let ACTIVE_DOWNLOADS = 0;
 const ACTIVE_TRIMS = new Set();
+const ACTIVE_MIXES = new Set();
+const MAIN_PLAYLIST_KEY = '__main__';
 
 function createDownloadJob(url) {
   const jobId = Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -682,6 +684,207 @@ async function stitchVideoSegments(sourcePath, targetPath, segments, mode) {
   });
 }
 
+function computeVideoSegments(duration, clipSeconds) {
+  if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(clipSeconds) || clipSeconds <= 0) {
+    return [];
+  }
+
+  if (duration <= clipSeconds) {
+    return [{ position: 'begin', start: 0, end: duration }];
+  }
+
+  const begin = { position: 'begin', start: 0, end: clipSeconds };
+  const end = { position: 'end', start: Math.max(0, duration - clipSeconds), end: duration };
+  const midStart = Math.max(0, (duration - clipSeconds) / 2);
+  const middle = { position: 'middle', start: midStart, end: midStart + clipSeconds };
+  return [begin, middle, end];
+}
+
+function shuffleClips(clips) {
+  const shuffled = clips.slice();
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
+function buildMixPlan(videos, { clipSeconds, totalSeconds, arrangement, mixedOrder }) {
+  const perVideoSegments = (videos || [])
+    .filter((video) => Number.isFinite(video?.duration) && video.duration > 0)
+    .map((video) => ({
+      name: video.name,
+      segments: computeVideoSegments(video.duration, clipSeconds)
+    }));
+
+  let clips = [];
+
+  if (arrangement === 'mixed') {
+    ['begin', 'middle', 'end'].forEach((position) => {
+      perVideoSegments.forEach((video) => {
+        const segment = video.segments.find((seg) => seg.position === position);
+        if (segment) {
+          clips.push({ videoName: video.name, start: segment.start, end: segment.end });
+        }
+      });
+    });
+  } else {
+    perVideoSegments.forEach((video) => {
+      video.segments.forEach((segment) => {
+        clips.push({ videoName: video.name, start: segment.start, end: segment.end });
+      });
+    });
+  }
+
+  if (mixedOrder) {
+    clips = shuffleClips(clips);
+  }
+
+  const result = [];
+  let accumulated = 0;
+
+  for (const clip of clips) {
+    if (accumulated >= totalSeconds) {
+      break;
+    }
+
+    const clipLength = clip.end - clip.start;
+    const remaining = totalSeconds - accumulated;
+
+    if (clipLength <= remaining) {
+      result.push(clip);
+      accumulated += clipLength;
+    } else if (remaining > 0.5) {
+      result.push({ ...clip, end: clip.start + remaining });
+      accumulated += remaining;
+      break;
+    } else {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function formatMixDateStamp(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+}
+
+function buildMixVideoName(date) {
+  return `mix-${formatMixDateStamp(date)}.mp4`;
+}
+
+async function buildMixVideoFile(clipPlans, targetPath) {
+  const parsedTarget = path.parse(targetPath);
+  const tempTargetPath = path.join(
+    parsedTarget.dir,
+    `${parsedTarget.name}.tmp-${process.pid}-${Date.now()}${parsedTarget.ext || '.mp4'}`
+  );
+  const segmentPaths = clipPlans.map((_clip, index) =>
+    path.join(parsedTarget.dir, `${parsedTarget.name}.part-${index}-${process.pid}-${Date.now()}${parsedTarget.ext || '.mp4'}`)
+  );
+
+  const cleanup = () => {
+    removePartialTrimFile(tempTargetPath);
+    segmentPaths.forEach((segmentPath) => {
+      try {
+        if (fs.existsSync(segmentPath)) {
+          fs.unlinkSync(segmentPath);
+        }
+      } catch {
+        // Best-effort cleanup of failed segment files.
+      }
+    });
+  };
+
+  const runFfmpeg = (args, timeoutMs, stage) => new Promise((resolve, reject) => {
+    const child = spawn(resolveFfmpegBin(), args, { windowsHide: true });
+    let stderr = '';
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs);
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      error.stderr = stderr;
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        const error = new Error(`ffmpeg ${stage} timed out after ${Math.round(timeoutMs / 60000)} minutes.`);
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const error = new Error(stderr.trim() || `ffmpeg ${stage} failed with exit code ${code}.`);
+      error.stderr = stderr;
+      reject(error);
+    });
+  });
+
+  try {
+    for (let index = 0; index < clipPlans.length; index += 1) {
+      const clip = clipPlans[index];
+      const duration = Math.max(0.1, clip.end - clip.start);
+      const args = [
+        '-y',
+        '-ss', String(clip.start),
+        '-i', clip.fullPath,
+        '-t', String(duration),
+        '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1',
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-ar', '44100',
+        '-ac', '2',
+        segmentPaths[index]
+      ];
+      const timeoutMs = Math.max(3 * 60 * 1000, duration * 8 * 1000);
+      await runFfmpeg(args, timeoutMs, `mix segment ${index + 1}`);
+    }
+
+    const concatListPath = path.join(parsedTarget.dir, `${parsedTarget.name}.concat-${process.pid}-${Date.now()}.txt`);
+    const concatList = segmentPaths
+      .map((segmentPath) => `file '${segmentPath.replace(/'/g, "'\\''")}'`)
+      .join('\n');
+    try {
+      fs.writeFileSync(concatListPath, `${concatList}\n`, 'utf8');
+      await runFfmpeg(
+        ['-y', '-f', 'concat', '-safe', '0', '-i', concatListPath, '-c', 'copy', '-movflags', '+faststart', tempTargetPath],
+        5 * 60 * 1000,
+        'mix final concat'
+      );
+    } finally {
+      try { fs.unlinkSync(concatListPath); } catch {}
+    }
+
+    fs.renameSync(tempTargetPath, targetPath);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+
+  segmentPaths.forEach((segmentPath) => {
+    try {
+      if (fs.existsSync(segmentPath)) {
+        fs.unlinkSync(segmentPath);
+      }
+    } catch {
+      // Best-effort cleanup after a successful mix build.
+    }
+  });
+}
+
 async function loadPlaylistOrder() {
   const state = await loadPlaylistState();
   return state.order;
@@ -1178,6 +1381,10 @@ app.get('/loveshack-favorites', (_req, res) => {
 
 app.get('/loveshack-edit', (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'loveshack-edit.html'));
+});
+
+app.get('/mix-vid', (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'mix-vid.html'));
 });
 
 app.get('/api/videos', async (_req, res) => {
@@ -1898,6 +2105,151 @@ app.post('/api/videos/trim', async (req, res) => {
   }
 });
 
+async function getVideosForMixSource(playlistSource) {
+  if (playlistSource === MAIN_PLAYLIST_KEY) {
+    return listVideos();
+  }
+
+  const safeName = normalizePlaylistName(playlistSource);
+  const store = await loadFavoritesStore();
+  const playlist = store.playlists[safeName];
+  if (!playlist) {
+    return null;
+  }
+
+  const allVideos = await listAllVideoFiles();
+  const byName = new Map(allVideos.map((video) => [video.name, video]));
+  return playlist.items
+    .map((name) => byName.get(name))
+    .filter(Boolean);
+}
+
+app.post('/api/videos/mix', async (req, res) => {
+  const { playlistSource, clipSeconds, totalSeconds, arrangement, mixedOrder } = req.body || {};
+  const safeArrangement = arrangement === 'mixed' ? 'mixed' : 'linear';
+  const clipSecondsNum = Number(clipSeconds);
+  const totalSecondsNum = Number(totalSeconds);
+
+  if (!playlistSource || typeof playlistSource !== 'string') {
+    res.status(400).json({ error: 'playlistSource is required.' });
+    return;
+  }
+
+  if (!Number.isFinite(clipSecondsNum) || clipSecondsNum <= 0) {
+    res.status(400).json({ error: 'clipSeconds must be a positive number.' });
+    return;
+  }
+
+  if (!Number.isFinite(totalSecondsNum) || totalSecondsNum <= 0) {
+    res.status(400).json({ error: 'totalSeconds must be a positive number.' });
+    return;
+  }
+
+  let mixLockKey = null;
+
+  try {
+    const sourceVideos = await getVideosForMixSource(playlistSource);
+    if (!sourceVideos) {
+      res.status(404).json({ error: 'Playlist not found.' });
+      return;
+    }
+
+    if (sourceVideos.length === 0) {
+      res.status(400).json({ error: 'The selected playlist has no videos.' });
+      return;
+    }
+
+    const videosWithDuration = [];
+    for (const video of sourceVideos) {
+      const fullPath = path.join(VIDEOS_DIR, video.name);
+      const duration = await getVideoDuration(fullPath);
+      if (Number.isFinite(duration) && duration > 0) {
+        videosWithDuration.push({ name: video.name, fullPath, duration });
+      }
+    }
+
+    if (videosWithDuration.length === 0) {
+      res.status(400).json({ error: 'Could not read durations for any videos in this playlist.' });
+      return;
+    }
+
+    const plan = buildMixPlan(videosWithDuration, {
+      clipSeconds: clipSecondsNum,
+      totalSeconds: totalSecondsNum,
+      arrangement: safeArrangement,
+      mixedOrder: Boolean(mixedOrder)
+    });
+
+    if (plan.length === 0) {
+      res.status(400).json({ error: 'Could not build a mix from this playlist with the given options.' });
+      return;
+    }
+
+    const byName = new Map(videosWithDuration.map((video) => [video.name, video.fullPath]));
+    const clipPlans = plan.map((clip) => ({
+      ...clip,
+      fullPath: byName.get(clip.videoName)
+    }));
+
+    const outputName = buildMixVideoName(new Date());
+    const outputFull = path.join(VIDEOS_DIR, outputName);
+    mixLockKey = outputFull.toLowerCase();
+
+    if (ACTIVE_MIXES.has(mixLockKey)) {
+      res.status(409).json({ error: 'A mix with this name is already being created. Try again in a moment.' });
+      return;
+    }
+
+    ACTIVE_MIXES.add(mixLockKey);
+
+    await buildMixVideoFile(clipPlans, outputFull);
+
+    const mixUsable = await probeVideoFile(outputFull);
+    if (!mixUsable) {
+      throw new Error('Mix video was created but is not a valid media file.');
+    }
+
+    let favorites = null;
+    if (playlistSource === MAIN_PLAYLIST_KEY) {
+      await sendToMainPlaylist(outputName);
+    } else {
+      const safePlaylistName = normalizePlaylistName(playlistSource);
+      await removeFromMainPlaylistOnly(outputName);
+      const store = await loadFavoritesStore();
+      const now = new Date().toISOString();
+      if (!store.playlists[safePlaylistName]) {
+        store.playlists[safePlaylistName] = { createdAt: now, updatedAt: now, items: [] };
+      }
+      const playlist = store.playlists[safePlaylistName];
+      if (!playlist.items.includes(outputName)) {
+        playlist.items.push(outputName);
+        playlist.updatedAt = now;
+      }
+      await saveFavoritesStore(store);
+      favorites = await buildFavoritesResponse();
+    }
+
+    const videos = await listVideos();
+    res.status(201).json({
+      message: `Mix video created and added to the playlist as ${outputName}.`,
+      videoName: outputName,
+      videos,
+      ...(favorites ? favorites : {})
+    });
+  } catch (err) {
+    const message = err && err.stderr
+      ? String(err.stderr).trim() || 'Could not create mix video.'
+      : err && err.message
+        ? err.message
+        : 'Could not create mix video.';
+    res.status(500).json({ error: message });
+  } finally {
+    if (mixLockKey) {
+      ACTIVE_MIXES.delete(mixLockKey);
+    }
+  }
+});
+
 app.post('/api/videos/move', async (req, res) => {
   res.status(400).json({
     error: 'Manual move is disabled. Videos are auto-sorted by download date.'
@@ -1934,6 +2286,10 @@ module.exports = {
   resolveFfprobeBin,
   trimVideoFile,
   stitchVideoSegments,
+  computeVideoSegments,
+  buildMixPlan,
+  buildMixVideoName,
+  formatMixDateStamp,
   safeVideoPath,
   isUsableVideoFile,
   probeVideoFile
