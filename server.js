@@ -2217,10 +2217,13 @@ app.post('/api/videos/mix', async (req, res) => {
       await sendToMainPlaylist(outputName);
     } else {
       const safePlaylistName = normalizePlaylistName(playlistSource);
+      if (!safePlaylistName || UNSAFE_OBJECT_KEYS.has(safePlaylistName)) {
+        throw new Error('Invalid playlist name.');
+      }
       await removeFromMainPlaylistOnly(outputName);
       const store = await loadFavoritesStore();
       const now = new Date().toISOString();
-      if (!store.playlists[safePlaylistName]) {
+      if (!Object.prototype.hasOwnProperty.call(store.playlists, safePlaylistName)) {
         store.playlists[safePlaylistName] = { createdAt: now, updatedAt: now, items: [] };
       }
       const playlist = store.playlists[safePlaylistName];
