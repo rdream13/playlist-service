@@ -945,11 +945,14 @@ async function sendToMainPlaylist(videoName) {
   await savePlaylistState({ order, hidden });
 }
 
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function normalizePlaylistName(name) {
   if (typeof name !== 'string') {
     return '';
   }
-  return name.trim().replace(/\s+/g, ' ').slice(0, 80);
+  const safe = name.trim().replace(/\s+/g, ' ').slice(0, 80);
+  return UNSAFE_OBJECT_KEYS.has(safe) ? '' : safe;
 }
 
 function defaultFavoritesStore() {
