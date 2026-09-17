@@ -48,18 +48,18 @@
 
             <div class="trim-time-grid">
               <div>
-                <label for="trimStart">Scene 1 start</label>
+                <label id="trimStartLabel" for="trimStart">Scene 1 start</label>
                 <input id="trimStart" name="start" type="text" placeholder="00:00:00" value="00:00:00" />
               </div>
               <div>
-                <label for="trimEnd">Scene 1 end</label>
+                <label id="trimEndLabel" for="trimEnd">Scene 1 end</label>
                 <input id="trimEnd" name="end" type="text" placeholder="00:00:30" value="00:00:30" />
               </div>
             </div>
 
             <label for="trimEditMode">Edit mode</label>
             <select id="trimEditMode" name="editMode">
-              <option value="keep-scenes" selected>Keep two scenes and stitch</option>
+              <option value="keep-scenes" selected>Keep three scenes and stitch</option>
               <option value="single">Trim one range</option>
               <option value="remove-scene">Remove the middle scene</option>
             </select>
@@ -72,6 +72,17 @@
               <div>
                 <label id="trimSecondEndLabel" for="trimSecondEnd">Second scene end</label>
                 <input id="trimSecondEnd" name="secondEnd" type="text" placeholder="00:02:00" />
+              </div>
+            </div>
+
+            <div id="thirdSceneFields" class="trim-time-grid" hidden>
+              <div>
+                <label for="trimThirdStart">Third scene start</label>
+                <input id="trimThirdStart" name="thirdStart" type="text" placeholder="00:03:00" />
+              </div>
+              <div>
+                <label for="trimThirdEnd">Third scene end</label>
+                <input id="trimThirdEnd" name="thirdEnd" type="text" placeholder="00:04:00" />
               </div>
             </div>
 

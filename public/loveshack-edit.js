@@ -10,12 +10,17 @@ const el = {
   trimVideoSelect: document.getElementById('trimVideoSelect'),
   trimStart: document.getElementById('trimStart'),
   trimEnd: document.getElementById('trimEnd'),
+  trimStartLabel: document.getElementById('trimStartLabel'),
+  trimEndLabel: document.getElementById('trimEndLabel'),
   trimEditMode: document.getElementById('trimEditMode'),
   secondSceneFields: document.getElementById('secondSceneFields'),
   trimSecondStart: document.getElementById('trimSecondStart'),
   trimSecondEnd: document.getElementById('trimSecondEnd'),
   trimSecondStartLabel: document.getElementById('trimSecondStartLabel'),
   trimSecondEndLabel: document.getElementById('trimSecondEndLabel'),
+  thirdSceneFields: document.getElementById('thirdSceneFields'),
+  trimThirdStart: document.getElementById('trimThirdStart'),
+  trimThirdEnd: document.getElementById('trimThirdEnd'),
   trimSubmit: null,
   trimPlaylistSelect: document.getElementById('trimPlaylistSelect'),
   trimNewPlaylist: document.getElementById('trimNewPlaylist'),
@@ -152,11 +157,15 @@ function updateTrimRangeStatus() {
 
 function updateEditModeFields() {
   const multiScene = el.trimEditMode.value !== 'single';
-  el.secondSceneFields.hidden = !multiScene;
+  const keepingScenes = el.trimEditMode.value === 'keep-scenes';
   const removing = el.trimEditMode.value === 'remove-scene';
+  el.secondSceneFields.hidden = !keepingScenes;
+  el.thirdSceneFields.hidden = !keepingScenes;
   el.trimSubmit.textContent = removing ? 'Remove scene and save' : multiScene ? 'Stitch scenes and save' : 'Save trimmed clip';
-  el.trimSecondStartLabel.textContent = removing ? 'Removal boundary start' : 'Second scene start';
-  el.trimSecondEndLabel.textContent = removing ? 'Removal boundary end' : 'Second scene end';
+  el.trimStartLabel.textContent = removing ? 'Scene to remove start' : 'Scene 1 start';
+  el.trimEndLabel.textContent = removing ? 'Scene to remove end' : 'Scene 1 end';
+  el.trimSecondStartLabel.textContent = 'Second scene start';
+  el.trimSecondEndLabel.textContent = 'Second scene end';
   updateTrimRangeStatus();
 }
 
@@ -238,26 +247,37 @@ async function handleTrimSubmit(event) {
   }
 
   const mode = el.trimEditMode.value;
+  const keepingScenes = mode === 'keep-scenes';
+  const removing = mode === 'remove-scene';
   let segments = null;
-  if (mode !== 'single') {
+  if (keepingScenes) {
     const first = parseSceneRange(start, end);
     const second = parseSceneRange(el.trimSecondStart.value, el.trimSecondEnd.value);
-    if (!first || !second) {
-      setTrimStatus('Enter valid start and end times for both scenes.', 'error');
+    const third = parseSceneRange(el.trimThirdStart.value, el.trimThirdEnd.value);
+    if (!first || !second || !third) {
+      setTrimStatus('Enter valid start and end times for all three scenes.', 'error');
       return;
     }
-    if (second.start < first.end && first.start < second.end) {
-      setTrimStatus('The two scenes must not overlap.', 'error');
+    const candidateSegments = [first, second, ...(third ? [third] : [])]
+      .sort((a, b) => a.start - b.start);
+    if (candidateSegments.some((segment, index) => index > 0 && segment.start < candidateSegments[index - 1].end)) {
+      setTrimStatus('Scene ranges must not overlap.', 'error');
       return;
     }
-    if (state.currentDuration > 0 && second.end > state.currentDuration) {
+    if (state.currentDuration > 0 && candidateSegments.some((segment) => segment.end > state.currentDuration)) {
       setTrimStatus(
-        `Both scenes must stay within the video length of ${formatTimeLabel(state.currentDuration)}.`,
+        `All selected times must stay within the video length of ${formatTimeLabel(state.currentDuration)}.`,
         'error'
       );
       return;
     }
-    segments = [first, second].sort((a, b) => a.start - b.start);
+    segments = candidateSegments;
+  } else if (removing) {
+    segments = [parseSceneRange(start, end)];
+    if (!segments[0]) {
+      setTrimStatus('Enter the exact start and end times of the scene to remove.', 'error');
+      return;
+    }
   }
 
   try {

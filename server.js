@@ -558,7 +558,7 @@ async function stitchVideoSegments(sourcePath, targetPath, segments, mode) {
     `${parsedTarget.name}.tmp-${process.pid}-${Date.now()}${parsedTarget.ext || '.mp4'}`
   );
   const keptSegments = mode === 'remove-scene'
-    ? [{ start: 0, end: segments[0].start }, { start: segments[1].end, end: Number.MAX_SAFE_INTEGER }]
+    ? [{ start: 0, end: segments[0].start }, { start: segments[0].end, end: Number.MAX_SAFE_INTEGER }]
     : segments;
   const segmentPaths = keptSegments.map((_segment, index) =>
     path.join(parsedTarget.dir, `${parsedTarget.name}.part-${index}-${process.pid}-${Date.now()}${parsedTarget.ext || '.mp4'}`)
@@ -1651,8 +1651,13 @@ app.post('/api/videos/trim', async (req, res) => {
       end: Number(segment?.end)
     })).sort((a, b) => a.start - b.start)
     : [];
-  if (mode !== 'single' && normalizedSegments.length !== 2) {
-    res.status(400).json({ error: 'Two valid scene ranges are required.' });
+  const expectedSegmentCount = mode === 'keep-scenes' ? 3 : mode === 'remove-scene' ? 1 : 0;
+  if (mode !== 'single' && normalizedSegments.length !== expectedSegmentCount) {
+    res.status(400).json({
+      error: mode === 'keep-scenes'
+        ? 'Three valid scene ranges are required.'
+        : 'One removal range is required.'
+    });
     return;
   }
   if (mode !== 'single' && normalizedSegments.some((segment) =>
@@ -1662,8 +1667,9 @@ app.post('/api/videos/trim', async (req, res) => {
     res.status(400).json({ error: 'Scene ranges must have valid start and end times.' });
     return;
   }
-  if (mode !== 'single' && normalizedSegments[1].start < normalizedSegments[0].end &&
-    normalizedSegments[0].start < normalizedSegments[1].end) {
+  if (mode !== 'single' && normalizedSegments.some((segment, index) =>
+    index > 0 && segment.start < normalizedSegments[index - 1].end
+  )) {
     res.status(400).json({ error: 'Scene ranges must not overlap.' });
     return;
   }
