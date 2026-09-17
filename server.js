@@ -720,20 +720,36 @@ function computeVideoSegments(duration, lengths, positions) {
     return [{ position: 'begin', start: 0, end: duration }];
   }
 
+  const third = duration / 3;
+  const bounds = {
+    begin: { start: 0, end: third },
+    middle: { start: third, end: third * 2 },
+    end: { start: third * 2, end: duration }
+  };
+
   const segments = [];
 
-  if (enabledPositions.includes('begin') && Number.isFinite(lengths.begin) && lengths.begin > 0) {
-    segments.push({ position: 'begin', start: 0, end: lengths.begin });
-  }
+  MIX_POSITIONS.forEach((position) => {
+    if (!enabledPositions.includes(position)) {
+      return;
+    }
 
-  if (enabledPositions.includes('middle') && Number.isFinite(lengths.middle) && lengths.middle > 0) {
-    const midStart = Math.max(0, (duration - lengths.middle) / 2);
-    segments.push({ position: 'middle', start: midStart, end: midStart + lengths.middle });
-  }
+    const length = lengths?.[position];
+    if (!Number.isFinite(length) || length <= 0) {
+      return;
+    }
 
-  if (enabledPositions.includes('end') && Number.isFinite(lengths.end) && lengths.end > 0) {
-    segments.push({ position: 'end', start: Math.max(0, duration - lengths.end), end: duration });
-  }
+    const bound = bounds[position];
+    const available = bound.end - bound.start;
+
+    if (length >= available) {
+      segments.push({ position, start: bound.start, end: bound.end });
+      return;
+    }
+
+    const start = bound.start + Math.random() * (available - length);
+    segments.push({ position, start, end: start + length });
+  });
 
   return segments;
 }
