@@ -849,7 +849,7 @@ async function buildMixVideoFile(clipPlans, targetPath) {
         '-map', '0:v:0', '-map', '0:a:0?',
         '-vf', `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${MIX_TARGET_FPS}`,
         '-r', String(MIX_TARGET_FPS),
-        '-vsync', 'cfr',
+        '-fps_mode', 'cfr',
         '-c:v', 'libx264',
         '-preset', 'veryfast',
         '-crf', '23',
