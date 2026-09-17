@@ -290,6 +290,11 @@ function renderPlaylists() {
         }
       });
 
+      row.querySelector('.edit').addEventListener('click', () => {
+        const target = new URL(`/loveshack-edit?video=${encodeURIComponent(video.name)}`, window.location.origin);
+        window.location.href = target.toString();
+      });
+
       row.querySelector('.play').addEventListener('click', () => {
         state.playAllActive = false;
         state.playQueue = [...playlist.items];
