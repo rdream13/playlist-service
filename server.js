@@ -461,7 +461,7 @@ function removePartialTrimFile(targetPath) {
 async function trimVideoFile(sourcePath, targetPath, startSeconds, endSeconds) {
   const ffmpegBin = resolveFfmpegBin();
   const duration = Math.max(0.1, endSeconds - startSeconds);
-  const trimTimeoutMs = 2 * 60 * 1000;
+  const trimTimeoutMs = Math.max(10 * 60 * 1000, duration * 8 * 1000);
   const parsedTarget = path.parse(targetPath);
   const tempTargetPath = path.join(
     parsedTarget.dir,
@@ -481,12 +481,20 @@ async function trimVideoFile(sourcePath, targetPath, startSeconds, endSeconds) {
       '0:v:0',
       '-map',
       '0:a:0?',
-      '-c',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-crf',
+      '28',
+      '-c:a',
       'copy',
       '-sn',
       '-dn',
       '-avoid_negative_ts',
       'make_zero',
+      '-movflags',
+      '+faststart',
       tempTargetPath
     ];
 
@@ -625,7 +633,7 @@ async function stitchVideoSegments(sourcePath, targetPath, segments, mode) {
         args.push('-t', String(duration));
       }
       args.push('-map', '0:v:0', '-map', '0:a:0?');
-      if (mode === 'keep-scenes') {
+      if (mode === 'keep-scenes' || mode === 'remove-scene') {
         args.push(
           '-c:v', 'libx264',
           '-preset', 'ultrafast',
@@ -637,7 +645,7 @@ async function stitchVideoSegments(sourcePath, targetPath, segments, mode) {
         args.push('-c', 'copy', '-avoid_negative_ts', 'make_zero');
       }
       args.push(segmentPaths[index]);
-      const segmentTimeoutMs = mode === 'keep-scenes'
+      const segmentTimeoutMs = mode === 'keep-scenes' || mode === 'remove-scene'
         ? Math.max(10 * 60 * 1000, duration * 8 * 1000)
         : Math.max(5 * 60 * 1000, (duration || 1800) * 2 * 1000);
       await appendTrimDebugLog({
