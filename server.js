@@ -2217,20 +2217,27 @@ app.post('/api/videos/mix', async (req, res) => {
       await sendToMainPlaylist(outputName);
     } else {
       const safePlaylistName = normalizePlaylistName(playlistSource);
-      if (!safePlaylistName || UNSAFE_OBJECT_KEYS.has(safePlaylistName)) {
+      if (
+        !safePlaylistName ||
+        safePlaylistName === '__proto__' ||
+        safePlaylistName === 'constructor' ||
+        safePlaylistName === 'prototype'
+      ) {
         throw new Error('Invalid playlist name.');
       }
       await removeFromMainPlaylistOnly(outputName);
       const store = await loadFavoritesStore();
+      const playlistsMap = new Map(Object.entries(store.playlists));
       const now = new Date().toISOString();
-      if (!Object.prototype.hasOwnProperty.call(store.playlists, safePlaylistName)) {
-        store.playlists[safePlaylistName] = { createdAt: now, updatedAt: now, items: [] };
+      if (!playlistsMap.has(safePlaylistName)) {
+        playlistsMap.set(safePlaylistName, { createdAt: now, updatedAt: now, items: [] });
       }
-      const playlist = store.playlists[safePlaylistName];
+      const playlist = playlistsMap.get(safePlaylistName);
       if (!playlist.items.includes(outputName)) {
         playlist.items.push(outputName);
         playlist.updatedAt = now;
       }
+      store.playlists = Object.fromEntries(playlistsMap);
       await saveFavoritesStore(store);
       favorites = await buildFavoritesResponse();
     }
