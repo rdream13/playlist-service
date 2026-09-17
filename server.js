@@ -36,6 +36,11 @@ let ACTIVE_DOWNLOADS = 0;
 const ACTIVE_TRIMS = new Set();
 const ACTIVE_MIXES = new Set();
 const MAIN_PLAYLIST_KEY = '__main__';
+// Forcing a single constant frame rate across every re-encoded mix segment keeps
+// timestamps consistent when segments from different source videos (which may have
+// differing or variable frame rates) are concatenated. Without this, playback of the
+// combined mix can show frozen frames or apparent slow motion at segment boundaries.
+const MIX_TARGET_FPS = 30;
 
 function createDownloadJob(url) {
   const jobId = Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -837,20 +842,53 @@ async function buildMixVideoFile(clipPlans, targetPath) {
       const duration = Math.max(0.1, clip.end - clip.start);
       const args = [
         '-y',
+        '-fflags', '+genpts',
         '-ss', String(clip.start),
         '-i', clip.fullPath,
         '-t', String(duration),
-        '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1',
+        '-map', '0:v:0', '-map', '0:a:0?',
+        '-vf', `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${MIX_TARGET_FPS}`,
+        '-r', String(MIX_TARGET_FPS),
+        '-vsync', 'cfr',
         '-c:v', 'libx264',
         '-preset', 'veryfast',
         '-crf', '23',
         '-c:a', 'aac',
         '-ar', '44100',
         '-ac', '2',
+        '-af', 'aresample=async=1:first_pts=0',
+        '-avoid_negative_ts', 'make_zero',
         segmentPaths[index]
       ];
       const timeoutMs = Math.max(3 * 60 * 1000, duration * 8 * 1000);
-      await runFfmpeg(args, timeoutMs, `mix segment ${index + 1}`);
+      await appendTrimDebugLog({
+        stage: 'mix_segment_started',
+        segmentIndex: index,
+        videoName: clip.videoName,
+        start: clip.start,
+        end: clip.end,
+        duration,
+        timeoutMinutes: Math.round(timeoutMs / 60000),
+        output: segmentPaths[index]
+      });
+      try {
+        await runFfmpeg(args, timeoutMs, `mix segment ${index + 1}`);
+      } catch (error) {
+        await appendTrimDebugLog({
+          stage: 'mix_segment_failed',
+          segmentIndex: index,
+          videoName: clip.videoName,
+          error: error?.message,
+          stderr: error?.stderr
+        });
+        throw error;
+      }
+      await appendTrimDebugLog({
+        stage: 'mix_segment_finished',
+        segmentIndex: index,
+        output: segmentPaths[index],
+        outputSize: fs.existsSync(segmentPaths[index]) ? fs.statSync(segmentPaths[index]).size : 0
+      });
     }
 
     const concatListPath = path.join(parsedTarget.dir, `${parsedTarget.name}.concat-${process.pid}-${Date.now()}.txt`);
@@ -859,11 +897,28 @@ async function buildMixVideoFile(clipPlans, targetPath) {
       .join('\n');
     try {
       fs.writeFileSync(concatListPath, `${concatList}\n`, 'utf8');
+      await appendTrimDebugLog({
+        stage: 'mix_concat_started',
+        segmentCount: segmentPaths.length,
+        output: tempTargetPath
+      });
       await runFfmpeg(
         ['-y', '-f', 'concat', '-safe', '0', '-i', concatListPath, '-c', 'copy', '-movflags', '+faststart', tempTargetPath],
         5 * 60 * 1000,
         'mix final concat'
       );
+      await appendTrimDebugLog({
+        stage: 'mix_concat_finished',
+        output: tempTargetPath,
+        outputSize: fs.existsSync(tempTargetPath) ? fs.statSync(tempTargetPath).size : 0
+      });
+    } catch (error) {
+      await appendTrimDebugLog({
+        stage: 'mix_concat_failed',
+        error: error?.message,
+        stderr: error?.stderr
+      });
+      throw error;
     } finally {
       try { fs.unlinkSync(concatListPath); } catch {}
     }
