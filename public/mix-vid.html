@@ -89,6 +89,18 @@
               </div>
             </div>
 
+            <label class="inline-checkbox" for="mixIncludeRandomEnd">
+              <input id="mixIncludeRandomEnd" name="includeRandomEnd" type="checkbox" />
+              Include real end randomly (adds the true tail of the video as a 4th scene randomly, stitched in after End, only if the End clip doesn't already reach it). If both are false, no additional scene is added.
+            </label>
+
+            <div class="trim-time-grid">
+              <div>
+                <label for="mixRandomEndClipLength">Random ending clip length</label>
+                <input id="mixRandomEndClipLength" name="randomEndClipLength" type="text" placeholder="00:00:05" value="00:00:05" />
+              </div>
+            </div>
+
             <div class="trim-time-grid">
               <div>
                 <label for="mixTotalLength">Total mix length</label>

@@ -13,6 +13,19 @@ test('temporary trim files are detected', () => {
   assert.equal(server.isTemporaryTrimFile('clip [trim 00-00-10_00-00-15].mp4'), false);
 });
 
+test('markVideosInUse/unmarkVideosInUse refcount in-use source videos', () => {
+  assert.equal(server.isVideoInUse('shared.mp4'), false);
+
+  server.markVideosInUse(['shared.mp4', 'shared.mp4']);
+  assert.equal(server.isVideoInUse('SHARED.mp4'), true, 'lookup should be case-insensitive');
+
+  server.unmarkVideosInUse(['shared.mp4']);
+  assert.equal(server.isVideoInUse('shared.mp4'), true, 'still in use while refcount remains');
+
+  server.unmarkVideosInUse(['shared.mp4']);
+  assert.equal(server.isVideoInUse('shared.mp4'), false);
+});
+
 test('trim outputs are named consistently', () => {
   assert.equal(
     server.buildTrimmedVideoName('example.mp4', 10, 15),
@@ -33,6 +46,13 @@ test('multi-scene outputs identify the edit mode and ranges', () => {
       { start: 10, end: 20 }
     ]),
     'example [remove 00-00-10_00-00-20].mp4'
+  );
+  assert.equal(
+    server.buildMultiSceneVideoName('example.mp4', 'join-two', [
+      { start: 10, end: 20 },
+      { start: 30, end: 40 }
+    ]),
+    'example [join 00-00-10_00-00-20__00-00-30_00-00-40].mp4'
   );
 });
 
@@ -129,6 +149,69 @@ test('computeVideoSegments ignores the real end option when disabled or no lengt
 
   const segmentsNoLength = server.computeVideoSegments(100, { begin: 5 }, ['begin'], { enabled: true, seconds: 0 });
   assert.equal(segmentsNoLength.find((seg) => seg.position === 'realEnd'), undefined);
+});
+
+test('computeVideoSegments adds the true tail as randomEnd on a lucky roll', () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.1;
+  try {
+    const segments = server.computeVideoSegments(
+      100,
+      { begin: 5 },
+      ['begin'],
+      { enabled: false, seconds: 0 },
+      { enabled: true, seconds: 5 }
+    );
+    const randomEnd = segments.find((seg) => seg.position === 'randomEnd');
+    assert.ok(randomEnd, 'expected a randomEnd segment on a lucky roll');
+    assert.equal(randomEnd.start, 95);
+    assert.equal(randomEnd.end, 100);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('computeVideoSegments skips randomEnd on an unlucky roll or when disabled', () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.9;
+  try {
+    const segments = server.computeVideoSegments(
+      100,
+      { begin: 5 },
+      ['begin'],
+      { enabled: false, seconds: 0 },
+      { enabled: true, seconds: 5 }
+    );
+    assert.equal(segments.find((seg) => seg.position === 'randomEnd'), undefined);
+  } finally {
+    Math.random = originalRandom;
+  }
+
+  const disabledSegments = server.computeVideoSegments(
+    100,
+    { begin: 5 },
+    ['begin'],
+    { enabled: false, seconds: 0 },
+    { enabled: false, seconds: 5 }
+  );
+  assert.equal(disabledSegments.find((seg) => seg.position === 'randomEnd'), undefined);
+});
+
+test('computeVideoSegments skips randomEnd even on a lucky roll when the End clip already reaches the true end', () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.1;
+  try {
+    const segments = server.computeVideoSegments(
+      30,
+      { begin: 5, middle: 5, end: 10 },
+      ['begin', 'middle', 'end'],
+      { enabled: false, seconds: 0 },
+      { enabled: true, seconds: 5 }
+    );
+    assert.equal(segments.find((seg) => seg.position === 'randomEnd'), undefined);
+  } finally {
+    Math.random = originalRandom;
+  }
 });
 
 test('buildMixPlan in linear mode keeps each video\'s clips together in order', () => {

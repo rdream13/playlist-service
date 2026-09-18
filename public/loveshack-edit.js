@@ -13,14 +13,8 @@ const el = {
   trimStartLabel: document.getElementById('trimStartLabel'),
   trimEndLabel: document.getElementById('trimEndLabel'),
   trimEditMode: document.getElementById('trimEditMode'),
-  secondSceneFields: document.getElementById('secondSceneFields'),
-  trimSecondStart: document.getElementById('trimSecondStart'),
-  trimSecondEnd: document.getElementById('trimSecondEnd'),
-  trimSecondStartLabel: document.getElementById('trimSecondStartLabel'),
-  trimSecondEndLabel: document.getElementById('trimSecondEndLabel'),
-  thirdSceneFields: document.getElementById('thirdSceneFields'),
-  trimThirdStart: document.getElementById('trimThirdStart'),
-  trimThirdEnd: document.getElementById('trimThirdEnd'),
+  extraScenes: document.getElementById('extraScenes'),
+  addSceneBtn: document.getElementById('addSceneBtn'),
   trimSubmit: null,
   trimPlaylistSelect: document.getElementById('trimPlaylistSelect'),
   trimNewPlaylist: document.getElementById('trimNewPlaylist'),
@@ -31,6 +25,7 @@ const el = {
 };
 
 el.trimSubmit = el.trimForm.querySelector('button[type="submit"]');
+
 
 function setTrimStatus(message, kind = 'neutral') {
   const allowed = new Set(['neutral', 'success', 'error']);
@@ -80,7 +75,7 @@ function parseTimeString(value) {
 }
 
 async function fetchVideos() {
-  const res = await fetch('/api/videos');
+  const res = await fetch('/api/videos/all');
   if (!res.ok) {
     throw new Error('Unable to load videos.');
   }
@@ -156,17 +151,56 @@ function updateTrimRangeStatus() {
 }
 
 function updateEditModeFields() {
-  const multiScene = el.trimEditMode.value !== 'single';
-  const keepingScenes = el.trimEditMode.value === 'keep-scenes';
   const removing = el.trimEditMode.value === 'remove-scene';
-  el.secondSceneFields.hidden = !keepingScenes;
-  el.thirdSceneFields.hidden = !keepingScenes;
-  el.trimSubmit.textContent = removing ? 'Remove scene and save' : multiScene ? 'Stitch scenes and save' : 'Save trimmed clip';
+  el.extraScenes.hidden = removing;
+  el.addSceneBtn.hidden = removing;
+  el.trimSubmit.textContent = removing
+    ? 'Remove scene and save'
+    : getSceneRows().length > 1
+      ? 'Stitch scenes and save'
+      : 'Save trimmed clip';
   el.trimStartLabel.textContent = removing ? 'Scene to remove start' : 'Scene 1 start';
   el.trimEndLabel.textContent = removing ? 'Scene to remove end' : 'Scene 1 end';
-  el.trimSecondStartLabel.textContent = 'Second scene start';
-  el.trimSecondEndLabel.textContent = 'Second scene end';
   updateTrimRangeStatus();
+}
+
+function getSceneRows() {
+  return Array.from(el.extraScenes.querySelectorAll('.scene-row'));
+}
+
+function renumberSceneRows() {
+  getSceneRows().forEach((row, index) => {
+    const sceneNumber = index + 2;
+    row.querySelector('.scene-row-start-label').textContent = `Scene ${sceneNumber} start`;
+    row.querySelector('.scene-row-end-label').textContent = `Scene ${sceneNumber} end`;
+  });
+}
+
+function addSceneRow() {
+  const sceneNumber = getSceneRows().length + 2;
+  const row = document.createElement('div');
+  row.className = 'scene-row';
+  row.innerHTML = `
+    <div>
+      <label class="scene-row-start-label">Scene ${sceneNumber} start</label>
+      <input class="scene-row-start" type="text" placeholder="00:01:00" />
+    </div>
+    <div>
+      <label class="scene-row-end-label">Scene ${sceneNumber} end</label>
+      <input class="scene-row-end" type="text" placeholder="00:02:00" />
+    </div>
+    <button class="btn tiny scene-row-remove" type="button" title="Remove this scene">Remove</button>
+  `;
+  row.querySelector('.scene-row-remove').addEventListener('click', () => {
+    row.remove();
+    renumberSceneRows();
+    updateEditModeFields();
+  });
+  row.querySelectorAll('input').forEach((input) => {
+    input.addEventListener('input', updateTrimRangeStatus);
+  });
+  el.extraScenes.appendChild(row);
+  updateEditModeFields();
 }
 
 function parseSceneRange(startInput, endInput) {
@@ -177,6 +211,15 @@ function parseSceneRange(startInput, endInput) {
   }
   return { start, end };
 }
+
+function collectSceneRanges() {
+  const first = parseSceneRange(el.trimStart.value, el.trimEnd.value);
+  const extras = getSceneRows().map((row) =>
+    parseSceneRange(row.querySelector('.scene-row-start').value, row.querySelector('.scene-row-end').value)
+  );
+  return [first, ...extras];
+}
+
 
 function previewSelectedVideo(videoName) {
   const video = state.videos.find((item) => item.name === videoName);
@@ -247,19 +290,16 @@ async function handleTrimSubmit(event) {
   }
 
   const mode = el.trimEditMode.value;
-  const keepingScenes = mode === 'keep-scenes';
   const removing = mode === 'remove-scene';
   let segments = null;
-  if (keepingScenes) {
-    const first = parseSceneRange(start, end);
-    const second = parseSceneRange(el.trimSecondStart.value, el.trimSecondEnd.value);
-    const third = parseSceneRange(el.trimThirdStart.value, el.trimThirdEnd.value);
-    if (!first || !second || !third) {
-      setTrimStatus('Enter valid start and end times for all three scenes.', 'error');
+  let effectiveMode = mode;
+  if (!removing) {
+    const candidateSegments = collectSceneRanges();
+    if (candidateSegments.some((segment) => !segment)) {
+      setTrimStatus('Enter valid start and end times for every scene.', 'error');
       return;
     }
-    const candidateSegments = [first, second, ...(third ? [third] : [])]
-      .sort((a, b) => a.start - b.start);
+    candidateSegments.sort((a, b) => a.start - b.start);
     if (candidateSegments.some((segment, index) => index > 0 && segment.start < candidateSegments[index - 1].end)) {
       setTrimStatus('Scene ranges must not overlap.', 'error');
       return;
@@ -271,8 +311,13 @@ async function handleTrimSubmit(event) {
       );
       return;
     }
-    segments = candidateSegments;
-  } else if (removing) {
+    if (candidateSegments.length > 1) {
+      segments = candidateSegments;
+      effectiveMode = 'keep-scenes';
+    } else {
+      effectiveMode = 'single';
+    }
+  } else {
     segments = [parseSceneRange(start, end)];
     if (!segments[0]) {
       setTrimStatus('Enter the exact start and end times of the scene to remove.', 'error');
@@ -286,7 +331,7 @@ async function handleTrimSubmit(event) {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ videoName, start, end, playlistName, mode, segments })
+      body: JSON.stringify({ videoName, start, end, playlistName, mode: effectiveMode, segments })
     });
 
     const data = await res.json().catch(() => ({}));
@@ -297,6 +342,8 @@ async function handleTrimSubmit(event) {
     setTrimStatus(data.message || 'Trim saved to favorites successfully.', 'success');
     el.trimNewPlaylist.value = '';
     el.trimPlaylistSelect.value = '';
+    el.extraScenes.innerHTML = '';
+    updateEditModeFields();
     await fetchFavoritesPlaylists();
     await fetchVideos();
     if (videoName) {
@@ -348,6 +395,8 @@ el.trimVideoSelect.addEventListener('change', (event) => {
 });
 
 el.trimEditMode.addEventListener('change', updateEditModeFields);
+
+el.addSceneBtn.addEventListener('click', addSceneRow);
 
 el.trimPresetButtons.forEach((button) => {
   button.addEventListener('click', () => {

@@ -14,6 +14,8 @@ const el = {
   mixEndClipLength: document.getElementById('mixEndClipLength'),
   mixIncludeRealEnd: document.getElementById('mixIncludeRealEnd'),
   mixRealEndClipLength: document.getElementById('mixRealEndClipLength'),
+  mixIncludeRandomEnd: document.getElementById('mixIncludeRandomEnd'),
+  mixRandomEndClipLength: document.getElementById('mixRandomEndClipLength'),
   mixTotalLength: document.getElementById('mixTotalLength'),
   mixArrangement: document.getElementById('mixArrangement'),
   mixRandomOrder: document.getElementById('mixRandomOrder'),
@@ -107,9 +109,10 @@ async function handleMixSubmit(event) {
   if (el.mixIncludeEnd.checked) positions.push('end');
 
   const includeRealEnd = el.mixIncludeRealEnd.checked;
+  const includeRandomEnd = el.mixIncludeRandomEnd.checked;
 
-  if (positions.length === 0 && !includeRealEnd) {
-    setMixStatus('Select at least one clip position (begin, middle, end, or real end).', 'error');
+  if (positions.length === 0 && !includeRealEnd && !includeRandomEnd) {
+    setMixStatus('Select at least one clip position (begin, middle, end, real end, or random end).', 'error');
     return;
   }
 
@@ -134,6 +137,15 @@ async function handleMixSubmit(event) {
     realEndSeconds = parseTimeString(el.mixRealEndClipLength.value);
     if (realEndSeconds === null || realEndSeconds <= 0) {
       setMixStatus('Enter a valid real end clip length such as 00:00:05.', 'error');
+      return;
+    }
+  }
+
+  let randomEndSeconds = null;
+  if (includeRandomEnd) {
+    randomEndSeconds = parseTimeString(el.mixRandomEndClipLength.value);
+    if (randomEndSeconds === null || randomEndSeconds <= 0) {
+      setMixStatus('Enter a valid random ending clip length such as 00:00:05.', 'error');
       return;
     }
   }
@@ -169,7 +181,9 @@ async function handleMixSubmit(event) {
         arrangement,
         mixedOrder,
         includeRealEnd,
-        realEndSeconds
+        realEndSeconds,
+        includeRandomEnd,
+        randomEndSeconds
       })
     });
 

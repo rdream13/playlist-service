@@ -60,32 +60,13 @@
 
             <label for="trimEditMode">Edit mode</label>
             <select id="trimEditMode" name="editMode">
-              <option value="keep-scenes" selected>Keep three scenes and stitch</option>
-              <option value="single">Trim one range</option>
-              <option value="remove-scene">Remove the middle scene</option>
+              <option value="keep-scenes" selected>Keep scene(s) and stitch</option>
+              <option value="remove-scene">Remove a scene</option>
             </select>
 
-            <div id="secondSceneFields" class="trim-time-grid" hidden>
-              <div>
-                <label id="trimSecondStartLabel" for="trimSecondStart">Second scene start</label>
-                <input id="trimSecondStart" name="secondStart" type="text" placeholder="00:01:00" />
-              </div>
-              <div>
-                <label id="trimSecondEndLabel" for="trimSecondEnd">Second scene end</label>
-                <input id="trimSecondEnd" name="secondEnd" type="text" placeholder="00:02:00" />
-              </div>
-            </div>
+            <div id="extraScenes"></div>
 
-            <div id="thirdSceneFields" class="trim-time-grid" hidden>
-              <div>
-                <label for="trimThirdStart">Third scene start</label>
-                <input id="trimThirdStart" name="thirdStart" type="text" placeholder="00:03:00" />
-              </div>
-              <div>
-                <label for="trimThirdEnd">Third scene end</label>
-                <input id="trimThirdEnd" name="thirdEnd" type="text" placeholder="00:04:00" />
-              </div>
-            </div>
+            <button id="addSceneBtn" class="btn tiny" type="button">+ Add scene</button>
 
             <div class="trim-presets">
               <button class="btn tiny trim-preset" data-seconds="120" type="button">2 min</button>

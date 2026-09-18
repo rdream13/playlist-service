@@ -35,6 +35,34 @@ const MAX_CONCURRENT_DOWNLOADS = Math.max(
 let ACTIVE_DOWNLOADS = 0;
 const ACTIVE_TRIMS = new Set();
 const ACTIVE_MIXES = new Set();
+// Tracks base video names currently being read as ffmpeg input by a trim or mix job
+// (refcounted, since more than one job could reference the same source at once), so
+// deleting/renaming a file mid-job doesn't turn a long-running ffmpeg read into a crash.
+const ACTIVE_SOURCE_VIDEOS = new Map();
+
+function markVideosInUse(names) {
+  names.forEach((name) => {
+    const key = name.toLowerCase();
+    ACTIVE_SOURCE_VIDEOS.set(key, (ACTIVE_SOURCE_VIDEOS.get(key) || 0) + 1);
+  });
+}
+
+function unmarkVideosInUse(names) {
+  names.forEach((name) => {
+    const key = name.toLowerCase();
+    const count = ACTIVE_SOURCE_VIDEOS.get(key) || 0;
+    if (count <= 1) {
+      ACTIVE_SOURCE_VIDEOS.delete(key);
+    } else {
+      ACTIVE_SOURCE_VIDEOS.set(key, count - 1);
+    }
+  });
+}
+
+function isVideoInUse(name) {
+  return ACTIVE_SOURCE_VIDEOS.has(name.toLowerCase());
+}
+
 const MAIN_PLAYLIST_KEY = '__main__';
 // Forcing a single constant frame rate across every re-encoded mix segment keeps
 // timestamps consistent when segments from different source videos (which may have
@@ -42,7 +70,7 @@ const MAIN_PLAYLIST_KEY = '__main__';
 // combined mix can show frozen frames or apparent slow motion at segment boundaries.
 const MIX_TARGET_FPS = 30;
 
-function createDownloadJob(url) {
+function createDownloadJob(url, favoritePlaylistName) {
   const jobId = Date.now().toString(36) + Math.random().toString(36).substr(2);
   const job = {
     id: jobId,
@@ -53,7 +81,8 @@ function createDownloadJob(url) {
     error: null,
     progressPercent: 0,
     startTime: Date.now(),
-    endTime: null
+    endTime: null,
+    favoritePlaylistName: favoritePlaylistName || null
   };
   DOWNLOAD_JOBS.set(jobId, job);
   return job;
@@ -562,7 +591,7 @@ function buildMultiSceneVideoName(fileName, mode, segments) {
   const stamps = segments
     .map((segment) => `${formatTrimStamp(segment.start)}_${formatTrimStamp(segment.end)}`)
     .join('__');
-  const label = mode === 'remove-scene' ? 'remove' : 'scenes';
+  const label = mode === 'remove-scene' ? 'remove' : mode === 'join-two' ? 'join' : 'scenes';
   return `${parsed.name} [${label} ${stamps}]${ext}`;
 }
 
@@ -633,7 +662,7 @@ async function stitchVideoSegments(sourcePath, targetPath, segments, mode) {
         args.push('-t', String(duration));
       }
       args.push('-map', '0:v:0', '-map', '0:a:0?');
-      if (mode === 'keep-scenes' || mode === 'remove-scene') {
+      if (mode === 'keep-scenes' || mode === 'remove-scene' || mode === 'join-two') {
         args.push(
           '-c:v', 'libx264',
           '-preset', 'ultrafast',
@@ -645,7 +674,7 @@ async function stitchVideoSegments(sourcePath, targetPath, segments, mode) {
         args.push('-c', 'copy', '-avoid_negative_ts', 'make_zero');
       }
       args.push(segmentPaths[index]);
-      const segmentTimeoutMs = mode === 'keep-scenes' || mode === 'remove-scene'
+      const segmentTimeoutMs = mode === 'keep-scenes' || mode === 'remove-scene' || mode === 'join-two'
         ? Math.max(10 * 60 * 1000, duration * 8 * 1000)
         : Math.max(5 * 60 * 1000, (duration || 1800) * 2 * 1000);
       await appendTrimDebugLog({
@@ -704,7 +733,7 @@ const MIX_POSITIONS = ['begin', 'middle', 'end'];
 // 4th scene covering the actual tail of the video (roughly the last 10%-15%).
 const REAL_END_THRESHOLD_RATIO = 0.125;
 
-function computeVideoSegments(duration, lengths, positions, realEnd) {
+function computeVideoSegments(duration, lengths, positions, realEnd, randomEnd) {
   if (!Number.isFinite(duration) || duration <= 0) {
     return [];
   }
@@ -717,8 +746,9 @@ function computeVideoSegments(duration, lengths, positions, realEnd) {
     .filter((value) => Number.isFinite(value) && value > 0);
 
   const realEndEnabled = Boolean(realEnd?.enabled) && Number.isFinite(realEnd?.seconds) && realEnd.seconds > 0;
+  const randomEndEnabled = Boolean(randomEnd?.enabled) && Number.isFinite(randomEnd?.seconds) && randomEnd.seconds > 0;
 
-  if (validLengths.length === 0 && !realEndEnabled) {
+  if (validLengths.length === 0 && !realEndEnabled && !randomEndEnabled) {
     return [];
   }
 
@@ -760,22 +790,31 @@ function computeVideoSegments(duration, lengths, positions, realEnd) {
     segments.push({ position, start, end: start + length });
   });
 
-  if (realEndEnabled) {
-    const endSegment = segments.find((segment) => segment.position === 'end');
-    const endCoverageEnd = endSegment ? endSegment.end : 0;
-    const thresholdStart = duration * (1 - REAL_END_THRESHOLD_RATIO);
+  const endSegment = segments.find((segment) => segment.position === 'end');
+  const endCoverageEnd = endSegment ? endSegment.end : 0;
+  const thresholdStart = duration * (1 - REAL_END_THRESHOLD_RATIO);
+  const trueTailEligible = endCoverageEnd < thresholdStart;
 
-    if (endCoverageEnd < thresholdStart) {
-      const realEndLength = Math.min(realEnd.seconds, duration);
-      segments.push({ position: 'realEnd', start: Math.max(0, duration - realEndLength), end: duration });
+  if (realEndEnabled && trueTailEligible) {
+    const realEndLength = Math.min(realEnd.seconds, duration);
+    segments.push({ position: 'realEnd', start: Math.max(0, duration - realEndLength), end: duration });
+  }
+
+  if (randomEndEnabled && trueTailEligible && Math.random() < 0.5) {
+    // 50/50 chance to also stitch in the true tail of the video as an extra ending scene.
+    const randomEndLength = Math.min(randomEnd.seconds, duration);
+    const randomEndStart = Math.max(0, duration - randomEndLength);
+    const alreadyCovered = segments.some((segment) => segment.start === randomEndStart);
+    if (!alreadyCovered) {
+      segments.push({ position: 'randomEnd', start: randomEndStart, end: duration });
     }
   }
 
   return segments;
 }
 
-function shuffleClips(clips) {
-  const shuffled = clips.slice();
+function shuffleArray(items) {
+  const shuffled = items.slice();
   for (let i = shuffled.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
@@ -783,7 +822,7 @@ function shuffleClips(clips) {
   return shuffled;
 }
 
-const ALL_MIX_SEGMENT_POSITIONS = [...MIX_POSITIONS, 'realEnd'];
+const ALL_MIX_SEGMENT_POSITIONS = [...MIX_POSITIONS, 'realEnd', 'randomEnd'];
 
 function buildMixPlan(videos, {
   beginSeconds,
@@ -794,15 +833,18 @@ function buildMixPlan(videos, {
   arrangement,
   mixedOrder,
   includeRealEnd,
-  realEndSeconds
+  realEndSeconds,
+  includeRandomEnd,
+  randomEndSeconds
 }) {
   const lengths = { begin: beginSeconds, middle: middleSeconds, end: endSeconds };
   const realEnd = { enabled: Boolean(includeRealEnd), seconds: realEndSeconds };
+  const randomEnd = { enabled: Boolean(includeRandomEnd), seconds: randomEndSeconds };
   const perVideoSegments = (videos || [])
     .filter((video) => Number.isFinite(video?.duration) && video.duration > 0)
     .map((video) => ({
       name: video.name,
-      segments: computeVideoSegments(video.duration, lengths, positions, realEnd)
+      segments: computeVideoSegments(video.duration, lengths, positions, realEnd, randomEnd)
     }));
 
   let clips = [];
@@ -825,7 +867,7 @@ function buildMixPlan(videos, {
   }
 
   if (mixedOrder) {
-    clips = shuffleClips(clips);
+    clips = shuffleArray(clips);
   }
 
   const result = [];
@@ -1152,6 +1194,25 @@ async function saveFavoritesStore(store) {
   await fsp.writeFile(FAVORITES_FILE, JSON.stringify(store, null, 2), 'utf8');
 }
 
+async function addVideoToFavoritesPlaylist(videoName, playlistName) {
+  const store = await loadFavoritesStore();
+  const now = new Date().toISOString();
+  if (!store.playlists[playlistName]) {
+    store.playlists[playlistName] = {
+      createdAt: now,
+      updatedAt: now,
+      items: []
+    };
+  }
+
+  const playlist = store.playlists[playlistName];
+  if (!playlist.items.includes(videoName)) {
+    playlist.items.push(videoName);
+    playlist.updatedAt = now;
+    await saveFavoritesStore(store);
+  }
+}
+
 async function buildFavoritesResponse() {
   const allVideos = await listAllVideoFiles();
   const byName = new Map(allVideos.map((video) => [video.name, video]));
@@ -1408,10 +1469,12 @@ function processDownloadQueue() {
 }
 
 async function runDownloadJob(jobId, payload) {
-  const { url, cookiesFile, cookiesFromBrowser, downloadPlaylist, ytDlpPath } = payload;
+  const { url, cookiesFile, cookiesFromBrowser, downloadPlaylist, ytDlpPath, favoritePlaylistName } = payload;
 
   try {
     updateJobStatus(jobId, 'downloading', { log: 'Initializing yt-dlp...' });
+
+    const beforeFiles = new Set((await listAllVideoFiles()).map((video) => video.name));
 
     const result = await runYtDlpDownload({
       videoUrl: url,
@@ -1429,8 +1492,26 @@ async function runDownloadJob(jobId, payload) {
     });
 
     await listVideos();
+
+    if (favoritePlaylistName) {
+      const afterFiles = await listAllVideoFiles();
+      const newFiles = afterFiles.filter((video) => !beforeFiles.has(video.name));
+      for (const video of newFiles) {
+        await addVideoToFavoritesPlaylist(video.name, favoritePlaylistName);
+        // Downloading straight to a favorites playlist should not also clutter the main playlist.
+        await removeFromMainPlaylistOnly(video.name);
+      }
+      if (newFiles.length) {
+        updateJobStatus(jobId, 'downloading', {
+          log: `Added ${newFiles.length} file(s) to favorites playlist "${favoritePlaylistName}" only (not the main playlist).`
+        });
+      }
+    }
+
     updateJobStatus(jobId, 'completed', {
-      log: 'Download complete. Video added to playlist.',
+      log: favoritePlaylistName
+        ? 'Download complete.'
+        : 'Download complete. Video added to playlist.',
       endTime: Date.now()
     });
   } catch (err) {
@@ -1537,6 +1618,15 @@ app.get('/api/videos', async (_req, res) => {
   }
 });
 
+app.get('/api/videos/all', async (_req, res) => {
+  try {
+    const videos = await listAllVideoFiles();
+    res.json({ videos });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not list videos.' });
+  }
+});
+
 app.post('/api/videos/upload', upload.single('video'), async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: 'No file uploaded.' });
@@ -1556,6 +1646,11 @@ app.delete('/api/videos/:name', async (req, res) => {
     const { base, full } = safeVideoPath(req.params.name);
     if (!isAllowedVideo(base)) {
       res.status(400).json({ error: 'Unsupported file type.' });
+      return;
+    }
+
+    if (isVideoInUse(base)) {
+      res.status(409).json({ error: 'This video is currently being used by an in-progress trim or mix job. Try again once it finishes.' });
       return;
     }
 
@@ -1601,6 +1696,10 @@ app.post('/api/videos/rename', async (req, res) => {
 
     if (oldSafe.base === newSafe.base) {
       res.status(400).json({ error: 'The new name must be different.' });
+      return;
+    }
+    if (isVideoInUse(oldSafe.base)) {
+      res.status(409).json({ error: 'This video is currently being used by an in-progress trim or mix job. Try again once it finishes.' });
       return;
     }
     if (!fs.existsSync(oldSafe.full)) {
@@ -1666,7 +1765,8 @@ app.post('/api/videos/download', async (req, res) => {
     cookiesFile,
     cookiesFromBrowser,
     downloadPlaylist,
-    ytDlpPath
+    ytDlpPath,
+    favoritePlaylistName
   } = req.body || {};
 
   if (!url || !isHttpUrl(url)) {
@@ -1692,7 +1792,16 @@ app.post('/api/videos/download', async (req, res) => {
     }
   }
 
-  const job = createDownloadJob(url);
+  let safeFavoritePlaylistName = '';
+  if (favoritePlaylistName) {
+    safeFavoritePlaylistName = normalizePlaylistName(favoritePlaylistName);
+    if (!safeFavoritePlaylistName) {
+      res.status(400).json({ error: 'favoritePlaylistName is invalid.' });
+      return;
+    }
+  }
+
+  const job = createDownloadJob(url, safeFavoritePlaylistName || null);
   updateJobStatus(job.id, 'queued', { log: `Queued download: ${url}` });
 
   res.status(202).json({
@@ -1706,7 +1815,8 @@ app.post('/api/videos/download', async (req, res) => {
     cookiesFile: cookiesFile ? path.resolve(ROOT_DIR, cookiesFile) : undefined,
     cookiesFromBrowser,
     downloadPlaylist: Boolean(downloadPlaylist),
-    ytDlpPath
+    ytDlpPath,
+    favoritePlaylistName: safeFavoritePlaylistName || undefined
   });
 });
 
@@ -1761,22 +1871,7 @@ app.post('/api/favorites/add', async (req, res) => {
       return;
     }
 
-    const store = await loadFavoritesStore();
-    const now = new Date().toISOString();
-    if (!store.playlists[safePlaylistName]) {
-      store.playlists[safePlaylistName] = {
-        createdAt: now,
-        updatedAt: now,
-        items: []
-      };
-    }
-
-    const playlist = store.playlists[safePlaylistName];
-    if (!playlist.items.includes(base)) {
-      playlist.items.push(base);
-      playlist.updatedAt = now;
-      await saveFavoritesStore(store);
-    }
+    await addVideoToFavoritesPlaylist(base, safePlaylistName);
 
     const data = await buildFavoritesResponse();
     res.json({ message: 'Added to favorites playlist.', ...data });
@@ -1988,7 +2083,7 @@ app.post('/api/videos/trim', async (req, res) => {
     return;
   }
 
-  if (!['single', 'keep-scenes', 'remove-scene'].includes(mode)) {
+  if (!['single', 'keep-scenes', 'remove-scene', 'join-two'].includes(mode)) {
     res.status(400).json({ error: 'Unsupported edit mode.' });
     return;
   }
@@ -1999,13 +2094,16 @@ app.post('/api/videos/trim', async (req, res) => {
       end: Number(segment?.end)
     })).sort((a, b) => a.start - b.start)
     : [];
-  const expectedSegmentCount = mode === 'keep-scenes' ? 3 : mode === 'remove-scene' ? 1 : 0;
-  if (mode !== 'single' && normalizedSegments.length !== expectedSegmentCount) {
-    res.status(400).json({
-      error: mode === 'keep-scenes'
-        ? 'Three valid scene ranges are required.'
-        : 'One removal range is required.'
-    });
+  if (mode === 'remove-scene' && normalizedSegments.length !== 1) {
+    res.status(400).json({ error: 'One removal range is required.' });
+    return;
+  }
+  if (mode === 'join-two' && normalizedSegments.length !== 2) {
+    res.status(400).json({ error: 'Two valid scene ranges are required.' });
+    return;
+  }
+  if (mode === 'keep-scenes' && normalizedSegments.length < 2) {
+    res.status(400).json({ error: 'At least two valid scene ranges are required to stitch.' });
     return;
   }
   if (mode !== 'single' && normalizedSegments.some((segment) =>
@@ -2026,6 +2124,7 @@ app.post('/api/videos/trim', async (req, res) => {
     const resolved = safeVideoPath(videoName);
     base = resolved.base;
     full = resolved.full;
+    markVideosInUse([base]);
 
     await appendTrimDebugLog({
       stage: 'source_resolved',
@@ -2121,7 +2220,7 @@ app.post('/api/videos/trim', async (req, res) => {
           sourceDuration,
           segments: normalizedSegments
         });
-        res.status(400).json({ error: 'Both scene ranges must stay within the source video duration.' });
+        res.status(400).json({ error: 'All selected scene ranges must stay within the source video duration.' });
         return;
       }
     }
@@ -2249,6 +2348,9 @@ app.post('/api/videos/trim', async (req, res) => {
     if (trimLockKey) {
       ACTIVE_TRIMS.delete(trimLockKey);
     }
+    if (base) {
+      unmarkVideosInUse([base]);
+    }
   }
 });
 
@@ -2282,12 +2384,16 @@ app.post('/api/videos/mix', async (req, res) => {
     arrangement,
     mixedOrder,
     includeRealEnd,
-    realEndSeconds
+    realEndSeconds,
+    includeRandomEnd,
+    randomEndSeconds
   } = req.body || {};
   const safeArrangement = arrangement === 'mixed' ? 'mixed' : 'linear';
   const totalSecondsNum = Number(totalSeconds);
   const safeIncludeRealEnd = Boolean(includeRealEnd);
   const realEndSecondsNum = Number(realEndSeconds);
+  const safeIncludeRandomEnd = Boolean(includeRandomEnd);
+  const randomEndSecondsNum = Number(randomEndSeconds);
 
   const safePositions = Array.isArray(positions)
     ? positions.filter((position) => MIX_POSITIONS.includes(position))
@@ -2298,8 +2404,8 @@ app.post('/api/videos/mix', async (req, res) => {
     return;
   }
 
-  if (safePositions.length === 0 && !safeIncludeRealEnd) {
-    res.status(400).json({ error: 'Select at least one clip position (begin, middle, end, or real end).' });
+  if (safePositions.length === 0 && !safeIncludeRealEnd && !safeIncludeRandomEnd) {
+    res.status(400).json({ error: 'Select at least one clip position (begin, middle, end, real end, or random end).' });
     return;
   }
 
@@ -2321,12 +2427,18 @@ app.post('/api/videos/mix', async (req, res) => {
     return;
   }
 
+  if (safeIncludeRandomEnd && (!Number.isFinite(randomEndSecondsNum) || randomEndSecondsNum <= 0)) {
+    res.status(400).json({ error: 'Random end clip length must be a positive number.' });
+    return;
+  }
+
   if (!Number.isFinite(totalSecondsNum) || totalSecondsNum <= 0) {
     res.status(400).json({ error: 'totalSeconds must be a positive number.' });
     return;
   }
 
   let mixLockKey = null;
+  let mixSourceNames = null;
 
   try {
     const sourceVideos = await getVideosForMixSource(playlistSource);
@@ -2354,7 +2466,11 @@ app.post('/api/videos/mix', async (req, res) => {
       return;
     }
 
-    const plan = buildMixPlan(videosWithDuration, {
+    // Preshuffle the playlist order so scenes come out in a different order every time,
+    // even when "randomize clip order" is left unchecked.
+    const shuffledVideos = shuffleArray(videosWithDuration);
+
+    const plan = buildMixPlan(shuffledVideos, {
       beginSeconds: lengthValues.begin,
       middleSeconds: lengthValues.middle,
       endSeconds: lengthValues.end,
@@ -2363,7 +2479,9 @@ app.post('/api/videos/mix', async (req, res) => {
       arrangement: safeArrangement,
       mixedOrder: Boolean(mixedOrder),
       includeRealEnd: safeIncludeRealEnd,
-      realEndSeconds: realEndSecondsNum
+      realEndSeconds: realEndSecondsNum,
+      includeRandomEnd: safeIncludeRandomEnd,
+      randomEndSeconds: randomEndSecondsNum
     });
 
     if (plan.length === 0) {
@@ -2387,6 +2505,9 @@ app.post('/api/videos/mix', async (req, res) => {
     }
 
     ACTIVE_MIXES.add(mixLockKey);
+
+    mixSourceNames = Array.from(new Set(clipPlans.map((clip) => clip.videoName)));
+    markVideosInUse(mixSourceNames);
 
     await buildMixVideoFile(clipPlans, outputFull);
 
@@ -2443,6 +2564,9 @@ app.post('/api/videos/mix', async (req, res) => {
     if (mixLockKey) {
       ACTIVE_MIXES.delete(mixLockKey);
     }
+    if (mixSourceNames) {
+      unmarkVideosInUse(mixSourceNames);
+    }
   }
 });
 
@@ -2488,5 +2612,8 @@ module.exports = {
   formatMixDateStamp,
   safeVideoPath,
   isUsableVideoFile,
-  probeVideoFile
+  probeVideoFile,
+  markVideosInUse,
+  unmarkVideosInUse,
+  isVideoInUse
 };

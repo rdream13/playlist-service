@@ -30,6 +30,8 @@ const el = {
   ytDlpPath: document.getElementById('ytDlpPath'),
   cookiesFromBrowser: document.getElementById('cookiesFromBrowser'),
   downloadPlaylist: document.getElementById('downloadPlaylist'),
+  downloadFavoritePlaylistSelect: document.getElementById('downloadFavoritePlaylistSelect'),
+  downloadFavoriteNewPlaylist: document.getElementById('downloadFavoriteNewPlaylist'),
   downloadBtn: document.getElementById('downloadBtn'),
   downloaderStatus: document.getElementById('downloaderStatus'),
   downloadStatusPanel: document.getElementById('downloadStatus'),
@@ -66,6 +68,24 @@ function populateFavoritesSelect() {
     option.textContent = `${playlist.name} (${playlist.count})`;
     el.favoritePlaylistSelect.appendChild(option);
   });
+}
+
+function populateDownloadFavoritesSelect() {
+  if (!el.downloadFavoritePlaylistSelect) {
+    return;
+  }
+
+  const previousValue = el.downloadFavoritePlaylistSelect.value;
+  el.downloadFavoritePlaylistSelect.innerHTML = '<option value="">Don\'t add to favorites</option>';
+
+  state.favoritesPlaylists.forEach((playlist) => {
+    const option = document.createElement('option');
+    option.value = playlist.name;
+    option.textContent = `${playlist.name} (${playlist.count})`;
+    el.downloadFavoritePlaylistSelect.appendChild(option);
+  });
+
+  el.downloadFavoritePlaylistSelect.value = previousValue;
 }
 
 async function openFavoriteDialog(videoName) {
@@ -397,6 +417,9 @@ function renderDownloadJobsUI() {
       const percent = Number.isFinite(job.progressPercent) ? job.progressPercent : 0;
       const statusLine = `Status: ${job.status} | ${percent.toFixed(0)}% | Elapsed: ${job.elapsedSeconds}s`;
       const title = job.url || `Job ${job.id}`;
+      const favoriteLine = job.favoritePlaylistName
+        ? `<p class="download-job-favorite">Adding to favorites: ${escapeHtml(job.favoritePlaylistName)}</p>`
+        : '';
       return `
         <article class="download-job">
           <div class="download-job-head">
@@ -407,6 +430,7 @@ function renderDownloadJobsUI() {
             <div class="download-progress-fill" style="width:${Math.max(0, Math.min(100, percent))}%"></div>
           </div>
           <p class="download-job-status">${escapeHtml(statusLine)}</p>
+          ${favoriteLine}
         </article>
       `;
     })
@@ -564,6 +588,9 @@ el.downloadForm.addEventListener('submit', async (event) => {
   const ytDlpPath = el.ytDlpPath.value;
   const cookiesFromBrowser = el.cookiesFromBrowser.value;
   const downloadPlaylist = el.downloadPlaylist.checked;
+  const newFavoritePlaylist = (el.downloadFavoriteNewPlaylist?.value || '').trim();
+  const selectedFavoritePlaylist = el.downloadFavoritePlaylistSelect?.value || '';
+  const favoritePlaylistName = newFavoritePlaylist || selectedFavoritePlaylist;
 
   // Clear URL immediately so user can submit the next one without waiting.
   el.downloadUrl.value = '';
@@ -576,7 +603,8 @@ el.downloadForm.addEventListener('submit', async (event) => {
       cookiesFile,
       ytDlpPath,
       cookiesFromBrowser,
-      downloadPlaylist
+      downloadPlaylist,
+      favoritePlaylistName
     });
 
     // Keep options intact for next submit, only clear URL field immediately.
@@ -587,13 +615,18 @@ el.downloadForm.addEventListener('submit', async (event) => {
       elapsedSeconds: 0,
       progressPercent: 0,
       logs: [],
-      startTime: Date.now()
+      startTime: Date.now(),
+      favoritePlaylistName: favoritePlaylistName || null
     });
     renderDownloadJobsUI();
     ensureDownloadPolling();
     refreshDownloadJobs().catch(() => {
       // best-effort immediate sync
     });
+
+    if (el.downloadFavoriteNewPlaylist) {
+      el.downloadFavoriteNewPlaylist.value = '';
+    }
   } catch (err) {
     el.status.textContent = err.message;
   }
@@ -620,6 +653,7 @@ if (el.favoriteForm) {
 
     try {
       await addVideoToFavorites(state.selectedFavoriteVideo, playlistName);
+      populateDownloadFavoritesSelect();
       closeFavoriteDialog();
       el.status.textContent = `Added ${state.selectedFavoriteVideo} to ${playlistName}.`;
     } catch (err) {
@@ -635,6 +669,7 @@ fetchVideos().catch((err) => {
 fetchFavoritesPlaylists()
   .then(() => {
     populateFavoritesSelect();
+    populateDownloadFavoritesSelect();
   })
   .catch(() => {
     // Ignore initial load errors because playlist creation can still proceed.

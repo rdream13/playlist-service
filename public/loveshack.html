@@ -78,6 +78,17 @@
             <input id="downloadPlaylist" name="downloadPlaylist" type="checkbox" />
             Download playlist entries (if URL is a playlist)
           </label>
+          <label for="downloadFavoritePlaylistSelect">Also add to favorites playlist</label>
+          <select id="downloadFavoritePlaylistSelect" name="downloadFavoritePlaylistSelect">
+            <option value="">Don't add to favorites</option>
+          </select>
+          <input
+            id="downloadFavoriteNewPlaylist"
+            name="downloadFavoriteNewPlaylist"
+            type="text"
+            maxlength="80"
+            placeholder="Or new favorites playlist name"
+          />
           <button id="downloadBtn" class="btn" type="submit">Download URL</button>
         </form>
         <p id="downloaderStatus" class="downloader-status">Checking downloader...</p>

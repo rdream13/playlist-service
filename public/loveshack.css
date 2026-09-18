@@ -322,6 +322,12 @@ body {
   font-size: 0.85rem;
 }
 
+.download-job-favorite {
+  margin: 4px 0 0;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
 .download-logs {
   background: #0f0d0a;
   border: 1px solid var(--stroke);
@@ -546,6 +552,19 @@ body {
   gap: 10px;
 }
 
+.scene-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.scene-row-remove {
+  height: 40px;
+  padding: 0 12px;
+}
+
 .trim-meta {
   margin: 8px 0 0;
   color: var(--muted);
@@ -657,6 +676,14 @@ body {
 
   .trim-time-grid {
     grid-template-columns: 1fr;
+  }
+
+  .scene-row {
+    grid-template-columns: 1fr;
+  }
+
+  .scene-row-remove {
+    width: 100%;
   }
 
   #player,
