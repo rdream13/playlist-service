@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Love Shack TV</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/loveshack.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+
+    <main class="page">
+      <header class="hero">
+        <h1>Love Shack TV</h1>
+        <p>Pick one or more playlists and let random 1:15 clips play back to back, like a channel that never stops.</p>
+      </header>
+
+      <section class="controls card">
+        <div class="control-row">
+          <a class="btn" href="/loveshack">Main</a>
+          <a class="btn" href="/loveshack-favorites">Favorites</a>
+          <a class="btn" href="/loveshack-edit">Edit</a>
+          <a class="btn" href="/mix-vid">Mix Vid</a>
+          <button id="refreshTvBtn" class="btn btn-primary" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="layout">
+        <div class="player card">
+          <h2 id="tvNowPlaying">Now Playing: none</h2>
+          <video id="tvPlayer" class="video-frame" controls preload="metadata"></video>
+          <p id="tvStatus" class="status">Ready.</p>
+          <div class="control-row">
+            <label for="tvClipSeconds">Clip length (seconds)</label>
+            <input id="tvClipSeconds" type="number" min="5" max="3600" step="1" value="75" />
+          </div>
+          <div class="control-row">
+            <button id="tvStartBtn" class="btn btn-primary" type="button">Start TV</button>
+            <button id="tvStopBtn" class="btn btn-ghost" type="button" disabled>Stop</button>
+          </div>
+          <div class="control-row playback-skip-row">
+            <button id="tvPrevBtn" class="btn" type="button" disabled>Previous Clip</button>
+            <button id="tvNextBtn" class="btn" type="button" disabled>Next Clip</button>
+          </div>
+        </div>
+
+        <div class="list card">
+          <h2>Channels (Playlists)</h2>
+          <div id="tvSourceList" class="tv-source-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/assets/tv.js" defer></script>
+  </body>
+</html>

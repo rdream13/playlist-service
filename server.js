@@ -906,6 +906,10 @@ function buildMixVideoName(date) {
   return `mix-${formatMixDateStamp(date)}.mp4`;
 }
 
+function buildStitchVideoName(date) {
+  return `stitch-${formatMixDateStamp(date)}.mp4`;
+}
+
 async function buildMixVideoFile(clipPlans, targetPath) {
   const parsedTarget = path.parse(targetPath);
   const tempTargetPath = path.join(
@@ -1607,6 +1611,10 @@ app.get('/loveshack-edit', (_req, res) => {
 
 app.get('/mix-vid', (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'mix-vid.html'));
+});
+
+app.get('/tv', (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'tv.html'));
 });
 
 app.get('/api/videos', async (_req, res) => {
@@ -2567,6 +2575,101 @@ app.post('/api/videos/mix', async (req, res) => {
     if (mixSourceNames) {
       unmarkVideosInUse(mixSourceNames);
     }
+  }
+});
+
+app.post('/api/videos/stitch-clips', async (req, res) => {
+  const { clips, playlistName } = req.body || {};
+  const safePlaylistName = normalizePlaylistName(playlistName);
+
+  if (!safePlaylistName) {
+    res.status(400).json({ error: 'playlistName is required.' });
+    return;
+  }
+
+  if (!Array.isArray(clips) || clips.length < 2) {
+    res.status(400).json({ error: 'At least two clips are required to stitch together.' });
+    return;
+  }
+
+  let resolvedClips;
+  try {
+    resolvedClips = clips.map((clip) => {
+      const { base, full } = safeVideoPath(clip?.videoName || '');
+      if (!isAllowedVideo(base)) {
+        throw new Error(`Unsupported file type: ${base || '(none)'}`);
+      }
+      return { base, full };
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Invalid clip selection.' });
+    return;
+  }
+
+  for (const clip of resolvedClips) {
+    if (!fs.existsSync(clip.full)) {
+      res.status(404).json({ error: `Clip not found: ${clip.base}` });
+      return;
+    }
+  }
+
+  const sourceNames = resolvedClips.map((clip) => clip.base);
+  const outputName = buildStitchVideoName(new Date());
+  const outputFull = path.join(VIDEOS_DIR, outputName);
+  const trimLockKey = outputFull.toLowerCase();
+
+  if (ACTIVE_TRIMS.has(trimLockKey)) {
+    res.status(409).json({ error: 'A stitch is already in progress. Wait for it to finish and try again.' });
+    return;
+  }
+
+  markVideosInUse(sourceNames);
+  ACTIVE_TRIMS.add(trimLockKey);
+
+  try {
+    const clipPlans = [];
+    for (const clip of resolvedClips) {
+      const sourceUsable = isUsableVideoFile(clip.full) || (await probeVideoFile(clip.full));
+      if (!sourceUsable) {
+        throw new Error(`Clip is missing or not a valid media file: ${clip.base}`);
+      }
+
+      const duration = await getVideoDuration(clip.full);
+      if (!Number.isFinite(duration) || duration <= 0) {
+        throw new Error(`Could not read duration for clip: ${clip.base}`);
+      }
+
+      clipPlans.push({ videoName: clip.base, fullPath: clip.full, start: 0, end: duration });
+    }
+
+    await buildMixVideoFile(clipPlans, outputFull);
+
+    const stitchedUsable = await probeVideoFile(outputFull);
+    if (!stitchedUsable) {
+      throw new Error('Stitched output was created but is not a valid media file.');
+    }
+
+    await removeFromMainPlaylistOnly(outputName);
+    await addVideoToFavoritesPlaylist(outputName, safePlaylistName);
+
+    const data = await buildFavoritesResponse();
+    res.status(201).json({
+      message: 'Stitched clip saved to favorites playlist.',
+      videoName: outputName,
+      playlistName: safePlaylistName,
+      ...data
+    });
+  } catch (err) {
+    removePartialTrimFile(outputFull);
+    const message = err && err.stderr
+      ? String(err.stderr).trim() || 'Could not stitch clips.'
+      : err && err.message
+        ? err.message
+        : 'Could not stitch clips.';
+    res.status(500).json({ error: message });
+  } finally {
+    ACTIVE_TRIMS.delete(trimLockKey);
+    unmarkVideosInUse(sourceNames);
   }
 });
 
