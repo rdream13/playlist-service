@@ -10,6 +10,18 @@ npm start
 Get-Process | Where-Object { $_.ProcessName -match 'yt|youtube|ffmpeg' } | Select-Object Id, ProcessName | Sort-Object ProcessName | Format-Table -AutoSize | Out-String
 Fastest ways to stop it on Windows PowerShell:
 
+Get-Process | Where-Object { $_.ProcessName -match 'node|ffmpeg|yt-dlp|youtube' } | Select-Object Id, ProcessName, Path
+
+Stop-Process -Id <PID> -Force
+
+Stop-Process -Id 8384 -Force
+Stop-Process -Id 96624 -Force
+
+taskkill /F /IM node.exe;
+taskkill /F /IM ffmpeg.exe;
+
+
+
 If it is running in the foreground terminal, press Ctrl+C.
 If it is still running in background, run:
 Stop-Process -Id 107104 -Force

@@ -28,6 +28,9 @@
           <button id="playAllBtn" class="btn btn-primary">Play All</button>
           <button id="stopBtn" class="btn btn-ghost">Stop</button>
           <a class="btn" href="/loveshack-favorites">Favorites</a>
+          <a class="btn" href="/loveshack-edit">Edit</a>
+          <a class="btn" href="/mix-vid">Mix Vid</a>
+          <a class="btn" href="/tv">TV</a>
           <div class="control-links-spacer" aria-hidden="true"></div>
           <div class="quick-links" aria-label="Quick links">
             <a href="https://pornhub.com" target="_blank" rel="noopener noreferrer">pornhub.com</a>
@@ -76,6 +79,17 @@
             <input id="downloadPlaylist" name="downloadPlaylist" type="checkbox" />
             Download playlist entries (if URL is a playlist)
           </label>
+          <label for="downloadFavoritePlaylistSelect">Also add to favorites playlist</label>
+          <select id="downloadFavoritePlaylistSelect" name="downloadFavoritePlaylistSelect">
+            <option value="">Don't add to favorites</option>
+          </select>
+          <input
+            id="downloadFavoriteNewPlaylist"
+            name="downloadFavoriteNewPlaylist"
+            type="text"
+            maxlength="80"
+            placeholder="Or new favorites playlist name"
+          />
           <button id="downloadBtn" class="btn" type="submit">Download URL</button>
         </form>
         <p id="downloaderStatus" class="downloader-status">Checking downloader...</p>
@@ -100,7 +114,7 @@
       <section class="layout">
         <div class="player card">
           <h2 id="nowPlayingTitle">Now Playing: none</h2>
-          <video id="player" controls preload="metadata"></video>
+          <video id="player" class="video-frame" controls preload="metadata"></video>
           <div class="control-row playback-skip-row">
             <button id="prevVideoBtn" class="btn" type="button">Previous Video</button>
             <button id="nextVideoBtn" class="btn" type="button">Next Video</button>
@@ -125,6 +139,7 @@
           <button class="btn tiny move-up" title="Move up">↑</button>
           <button class="btn tiny move-down" title="Move down">↓</button>
           <button class="btn tiny play-one">Play</button>
+          <button class="btn tiny edit">Edit</button>
           <button class="btn tiny favorite">Fav</button>
           <button class="btn tiny rename">Rename</button>
           <button class="btn tiny danger delete">Delete</button>

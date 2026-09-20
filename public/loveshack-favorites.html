@@ -25,6 +25,9 @@
       <section class="controls card">
         <div class="control-row">
           <a class="btn" href="/loveshack">Back To Deck</a>
+          <a class="btn" href="/loveshack-edit">Edit</a>
+          <a class="btn" href="/mix-vid">Mix Vid</a>
+          <a class="btn" href="/tv">TV</a>
           <button id="refreshFavoritesBtn" class="btn btn-primary" type="button">Refresh</button>
         </div>
       </section>
@@ -37,7 +40,7 @@
 
         <div class="favorites-player card">
           <h2 id="favoritesNowPlaying">Now Playing: none</h2>
-          <video id="favoritesPlayer" controls preload="metadata"></video>
+          <video id="favoritesPlayer" class="video-frame" controls preload="metadata"></video>
           <div class="control-row playback-skip-row">
             <button id="favoritesPrevBtn" class="btn" type="button">Previous Video</button>
             <button id="favoritesNextBtn" class="btn" type="button">Next Video</button>
@@ -54,6 +57,8 @@
           <button class="btn tiny move-up" title="Move up">↑</button>
           <button class="btn tiny move-down" title="Move down">↓</button>
           <button class="btn tiny to-main" title="Move to top of main playlist">To Main</button>
+          <button class="btn tiny rename" title="Rename video">Rename</button>
+          <button class="btn tiny edit">Edit</button>
           <button class="btn tiny play">Play</button>
           <button class="btn tiny danger remove">Remove</button>
         </div>
