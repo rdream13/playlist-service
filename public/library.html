@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Love Shack Library</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/loveshack.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+
+    <main class="page">
+      <header class="hero">
+        <h1>Love Shack Library</h1>
+        <p>Search and browse every video by title, notes, category, person, or keyword.</p>
+      </header>
+
+      <section class="controls card">
+        <div class="control-row">
+          <a class="btn" href="/loveshack">Main</a>
+          <a class="btn" href="/loveshack-favorites">Favorites</a>
+          <a class="btn" href="/loveshack-edit">Edit</a>
+          <a class="btn" href="/mix-vid">Mix Vid</a>
+          <a class="btn" href="/tv">TV</a>
+          <button id="refreshLibraryBtn" class="btn btn-primary" type="button">Refresh</button>
+          <button id="scanLibraryBtn" class="btn" type="button">Scan Library (auto-tag)</button>
+        </div>
+
+        <p id="scanStatus" class="downloader-status"></p>
+
+        <form id="searchForm" class="library-search-form">
+          <input id="searchQuery" name="q" type="search" placeholder="Search title, notes, tags..." />
+          <select id="tagFilter" name="tag">
+            <option value="">Any tag</option>
+          </select>
+          <select id="categoryFilter" name="category">
+            <option value="">Any category</option>
+          </select>
+          <select id="personFilter" name="person">
+            <option value="">Any person</option>
+          </select>
+          <button class="btn btn-primary" type="submit">Search</button>
+          <button id="clearSearchBtn" class="btn" type="button">Clear</button>
+        </form>
+      </section>
+
+      <section class="favorites-columns">
+        <div class="playlist-groups card">
+          <h2 id="libraryResultsHeading">Results</h2>
+          <ul id="libraryResults" class="library-results"></ul>
+        </div>
+
+        <div class="favorites-player card">
+          <h2 id="libraryNowPlaying">Now Playing: none</h2>
+          <video id="libraryPlayer" class="video-frame" controls preload="metadata"></video>
+          <p id="libraryStatus" class="status">Select a video to play or edit its metadata.</p>
+
+          <form id="metadataForm" class="metadata-form">
+            <h3 id="metadataHeading">Metadata</h3>
+            <label for="metaTitle">Title</label>
+            <input id="metaTitle" name="title" type="text" maxlength="200" placeholder="Optional title" />
+
+            <label for="metaNotes">Notes</label>
+            <textarea id="metaNotes" name="notes" maxlength="2000" placeholder="Optional notes"></textarea>
+
+            <label for="metaCategory">Category</label>
+            <input id="metaCategory" name="category" type="text" list="categoryOptions" maxlength="80" placeholder="ex: Full Scene" />
+            <datalist id="categoryOptions"></datalist>
+
+            <label for="metaPeople">People (comma-separated)</label>
+            <input id="metaPeople" name="people" type="text" placeholder="ex: Emily, Jordan" />
+
+            <label for="metaKeywords">Keywords (comma-separated)</label>
+            <input id="metaKeywords" name="keywords" type="text" placeholder="ex: outdoor, pov" />
+
+            <div class="metadata-actions">
+              <button class="btn btn-primary" type="submit">Save Metadata</button>
+            </div>
+            <p id="metadataStatus" class="favorite-message"></p>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <template id="libraryItemTemplate">
+      <li>
+        <span class="video-name"></span>
+        <div class="library-tags"></div>
+        <div class="actions">
+          <button class="btn tiny play">Play</button>
+          <button class="btn tiny edit">Edit</button>
+        </div>
+      </li>
+    </template>
+
+    <script src="/assets/library.js" defer></script>
+  </body>
+</html>

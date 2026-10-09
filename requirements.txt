@@ -1,0 +1,9 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
+# Phase 7: CLIP/YOLO auto-tagging ingest pipeline (CPU-only torch)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+open_clip_torch
+ultralytics

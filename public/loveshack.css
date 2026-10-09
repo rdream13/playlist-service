@@ -780,3 +780,151 @@ body {
     font-size: 0.8rem;
   }
 }
+
+.library-search-form {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr auto auto;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.library-search-form input,
+.library-search-form select {
+  border: 1px solid var(--stroke);
+  border-radius: 11px;
+  padding: 9px 11px;
+  font: inherit;
+  background: #fffdf8;
+}
+
+.library-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.library-results li {
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.62);
+  min-width: 0;
+}
+
+.library-results li.selected {
+  border-color: var(--accent);
+  background: rgba(255, 236, 214, 0.75);
+}
+
+.library-results .video-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.library-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-chip {
+  display: inline-block;
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.tag-chip-manual {
+  color: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.tag-chip-category {
+  color: #1d6b3a;
+  border-color: #1d6b3a;
+}
+
+.tag-chip-person {
+  color: #1d4e8b;
+  border-color: #1d4e8b;
+}
+
+.tag-chip-keyword {
+  color: var(--muted);
+}
+
+.tag-chip-object {
+  color: #8a5a1d;
+  border-color: #8a5a1d;
+}
+
+.metadata-form {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--stroke);
+  display: grid;
+  gap: 6px;
+}
+
+.metadata-form h3 {
+  margin: 0 0 4px;
+  font-family: 'Syne', sans-serif;
+}
+
+.metadata-form input,
+.metadata-form textarea {
+  border: 1px solid var(--stroke);
+  border-radius: 11px;
+  padding: 9px 11px;
+  font: inherit;
+  background: #fffdf8;
+  width: 100%;
+}
+
+.metadata-form textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.metadata-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.clip-metadata-group {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--stroke);
+  display: grid;
+  gap: 6px;
+}
+
+.clip-metadata-group input {
+  border: 1px solid var(--stroke);
+  border-radius: 11px;
+  padding: 9px 11px;
+  font: inherit;
+  background: #fffdf8;
+  width: 100%;
+}
+
+.clip-metadata-group[hidden] {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .library-search-form {
+    grid-template-columns: 1fr;
+  }
+}
+

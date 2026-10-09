@@ -32,7 +32,16 @@ const el = {
   trimPreview: document.getElementById('trimPreview'),
   trimDuration: document.getElementById('trimDuration'),
   trimStatus: document.getElementById('trimStatus'),
-  trimPresetButtons: Array.from(document.querySelectorAll('.trim-preset'))
+  trimPresetButtons: Array.from(document.querySelectorAll('.trim-preset')),
+  clipCategory: document.getElementById('clipCategory'),
+  clipCategoryOptions: document.getElementById('clipCategoryOptions'),
+  clipPeople: document.getElementById('clipPeople'),
+  clipKeywords: document.getElementById('clipKeywords'),
+  clipMetadataGroup: document.getElementById('clipMetadataGroup'),
+  scene1MetadataGroup: document.getElementById('scene1MetadataGroup'),
+  scene1Category: document.getElementById('scene1Category'),
+  scene1People: document.getElementById('scene1People'),
+  scene1Keywords: document.getElementById('scene1Keywords')
 };
 
 el.trimSubmit = el.trimForm.querySelector('button[type="submit"]');
@@ -115,6 +124,52 @@ async function fetchFavoritesPlaylists() {
   const data = await res.json();
   state.playlists = data.playlists || [];
   populateFavoritesSelect();
+}
+
+async function fetchLibraryCategories() {
+  const res = await fetch('/api/library/tags');
+  if (!res.ok) {
+    return;
+  }
+  const data = await res.json();
+  el.clipCategoryOptions.innerHTML = '';
+  (data.categories || []).forEach((label) => {
+    const option = document.createElement('option');
+    option.value = label;
+    el.clipCategoryOptions.appendChild(option);
+  });
+}
+
+function splitCommaList(value) {
+  return (value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function collectClipMetadata() {
+  return {
+    category: el.clipCategory.value.trim() || null,
+    people: splitCommaList(el.clipPeople.value),
+    keywords: splitCommaList(el.clipKeywords.value)
+  };
+}
+
+function collectMetadataFromFields(categoryEl, peopleEl, keywordsEl) {
+  return {
+    category: (categoryEl?.value || '').trim() || null,
+    people: splitCommaList(peopleEl?.value),
+    keywords: splitCommaList(keywordsEl?.value)
+  };
+}
+
+function clearClipMetadataFields() {
+  el.clipCategory.value = '';
+  el.clipPeople.value = '';
+  el.clipKeywords.value = '';
+  el.scene1Category.value = '';
+  el.scene1People.value = '';
+  el.scene1Keywords.value = '';
 }
 
 function populateVideoSelect() {
@@ -254,10 +309,16 @@ function updateEditModeFields() {
 
   el.scene1PlaylistGroup.hidden = !separate;
   el.globalPlaylistGroup.hidden = separate;
+  el.clipMetadataGroup.hidden = separate;
+  el.scene1MetadataGroup.hidden = !separate;
   getSceneRows().forEach((row) => {
     const playlistGroup = row.querySelector('.scene-row-playlist');
     if (playlistGroup) {
       playlistGroup.hidden = !separate;
+    }
+    const metadataGroup = row.querySelector('.scene-row-metadata');
+    if (metadataGroup) {
+      metadataGroup.hidden = !separate;
     }
   });
 
@@ -347,6 +408,18 @@ function renumberSceneRows() {
     if (playlistLabel) {
       playlistLabel.textContent = `Scene ${sceneNumber} playlist`;
     }
+    const categoryLabel = row.querySelector('.scene-row-category-label');
+    if (categoryLabel) {
+      categoryLabel.textContent = `Scene ${sceneNumber} category (optional)`;
+    }
+    const peopleLabel = row.querySelector('.scene-row-people-label');
+    if (peopleLabel) {
+      peopleLabel.textContent = `Scene ${sceneNumber} people (optional, comma-separated)`;
+    }
+    const keywordsLabel = row.querySelector('.scene-row-keywords-label');
+    if (keywordsLabel) {
+      keywordsLabel.textContent = `Scene ${sceneNumber} keywords (optional, comma-separated)`;
+    }
   });
 }
 
@@ -369,6 +442,14 @@ function addSceneRow() {
         <option value="">Choose existing playlist...</option>
       </select>
       <input class="scene-row-playlist-new" type="text" maxlength="80" placeholder="Or new playlist name" />
+    </div>
+    <div class="scene-row-metadata clip-metadata-group" hidden>
+      <label class="scene-row-category-label">Scene ${sceneNumber} category (optional)</label>
+      <input class="scene-row-category" type="text" list="clipCategoryOptions" maxlength="80" placeholder="ex: Full Scene" />
+      <label class="scene-row-people-label">Scene ${sceneNumber} people (optional, comma-separated)</label>
+      <input class="scene-row-people" type="text" placeholder="ex: Emily, Jordan" />
+      <label class="scene-row-keywords-label">Scene ${sceneNumber} keywords (optional, comma-separated)</label>
+      <input class="scene-row-keywords" type="text" placeholder="ex: outdoor, pov" />
     </div>
     <button class="btn tiny scene-row-remove" type="button" title="Remove this scene">Remove</button>
   `;
@@ -451,7 +532,8 @@ async function handleKeepSeparateSubmit(videoName) {
       label: 'Scene 1',
       start: el.trimStart.value,
       end: el.trimEnd.value,
-      playlistName: resolvePlaylistFromInputs(el.scene1PlaylistSelect, el.scene1PlaylistNew)
+      playlistName: resolvePlaylistFromInputs(el.scene1PlaylistSelect, el.scene1PlaylistNew),
+      metadata: collectMetadataFromFields(el.scene1Category, el.scene1People, el.scene1Keywords)
     },
     ...getSceneRows().map((row, index) => ({
       label: `Scene ${index + 2}`,
@@ -460,6 +542,11 @@ async function handleKeepSeparateSubmit(videoName) {
       playlistName: resolvePlaylistFromInputs(
         row.querySelector('.scene-row-playlist-select'),
         row.querySelector('.scene-row-playlist-new')
+      ),
+      metadata: collectMetadataFromFields(
+        row.querySelector('.scene-row-category'),
+        row.querySelector('.scene-row-people'),
+        row.querySelector('.scene-row-keywords')
       )
     }))
   ];
@@ -504,7 +591,8 @@ async function handleKeepSeparateSubmit(videoName) {
           start: scene.start,
           end: scene.end,
           playlistName: scene.playlistName,
-          mode: 'single'
+          mode: 'single',
+          ...scene.metadata
         })
       });
 
@@ -526,6 +614,7 @@ async function handleKeepSeparateSubmit(videoName) {
 
   setTrimStatus(`Saved all ${successCount} scene(s), each to its own favorites playlist.`, 'success');
   el.extraScenes.innerHTML = '';
+  clearClipMetadataFields();
   updateEditModeFields();
   await fetchFavoritesPlaylists();
   await fetchVideos();
@@ -565,7 +654,7 @@ async function handleStitchClipsSubmit() {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ clips, playlistName })
+      body: JSON.stringify({ clips, playlistName, ...collectClipMetadata() })
     });
 
     const data = await res.json().catch(() => ({}));
@@ -576,6 +665,7 @@ async function handleStitchClipsSubmit() {
     setTrimStatus(data.message || 'Stitched clip saved to favorites successfully.', 'success');
     el.trimNewPlaylist.value = '';
     el.trimPlaylistSelect.value = '';
+    clearClipMetadataFields();
     await fetchFavoritesPlaylists();
     await fetchVideos();
     await fetchMainVideos();
@@ -678,7 +768,7 @@ async function handleTrimSubmit(event) {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ videoName, start, end, playlistName, mode: effectiveMode, segments })
+      body: JSON.stringify({ videoName, start, end, playlistName, mode: effectiveMode, segments, ...collectClipMetadata() })
     });
 
     const data = await res.json().catch(() => ({}));
@@ -690,6 +780,7 @@ async function handleTrimSubmit(event) {
     el.trimNewPlaylist.value = '';
     el.trimPlaylistSelect.value = '';
     el.extraScenes.innerHTML = '';
+    clearClipMetadataFields();
     updateEditModeFields();
     await fetchFavoritesPlaylists();
     await fetchVideos();
@@ -703,7 +794,7 @@ async function handleTrimSubmit(event) {
 
 async function init() {
   try {
-    await Promise.all([fetchVideos(), fetchMainVideos(), fetchFavoritesPlaylists()]);
+    await Promise.all([fetchVideos(), fetchMainVideos(), fetchFavoritesPlaylists(), fetchLibraryCategories()]);
     ensureMinimumStitchClipRows();
     const preferredVideo = getSelectedVideoFromQuery();
     const selectedVideo = state.videos.some((video) => video.name === preferredVideo)

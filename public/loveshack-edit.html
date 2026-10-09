@@ -28,6 +28,7 @@
           <a class="btn" href="/loveshack-favorites">Favorites</a>
           <a class="btn" href="/mix-vid">Mix Vid</a>
           <a class="btn" href="/tv">TV</a>
+          <a class="btn" href="/library">Library</a>
           <button id="refreshTrimBtn" class="btn btn-primary" type="button">Refresh</button>
         </div>
       </section>
@@ -69,6 +70,15 @@
               <input id="scene1PlaylistNew" type="text" maxlength="80" placeholder="Or new playlist name" />
             </div>
 
+            <div id="scene1MetadataGroup" class="scene-row-metadata clip-metadata-group" hidden>
+              <label for="scene1Category">Scene 1 category (optional)</label>
+              <input id="scene1Category" type="text" list="clipCategoryOptions" maxlength="80" placeholder="ex: Full Scene" />
+              <label for="scene1People">Scene 1 people (optional, comma-separated)</label>
+              <input id="scene1People" type="text" placeholder="ex: Emily, Jordan" />
+              <label for="scene1Keywords">Scene 1 keywords (optional, comma-separated)</label>
+              <input id="scene1Keywords" type="text" placeholder="ex: outdoor, pov" />
+            </div>
+
             <label for="trimEditMode">Edit mode</label>
             <select id="trimEditMode" name="editMode">
               <option value="keep-scenes" selected>Keep scene(s) and stitch</option>
@@ -108,6 +118,18 @@
                 maxlength="80"
                 placeholder="ex: 2026-09-14"
               />
+            </div>
+
+            <div id="clipMetadataGroup" class="clip-metadata-group">
+              <label for="clipCategory">Category (optional)</label>
+              <input id="clipCategory" name="category" type="text" list="clipCategoryOptions" maxlength="80" placeholder="ex: Full Scene" />
+              <datalist id="clipCategoryOptions"></datalist>
+
+              <label for="clipPeople">People (optional, comma-separated)</label>
+              <input id="clipPeople" name="people" type="text" placeholder="ex: Emily, Jordan" />
+
+              <label for="clipKeywords">Keywords (optional, comma-separated)</label>
+              <input id="clipKeywords" name="keywords" type="text" placeholder="ex: outdoor, pov" />
             </div>
 
             <button class="btn btn-primary" type="submit">Save trimmed clip</button>

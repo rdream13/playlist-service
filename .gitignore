@@ -1,3 +1,11 @@
 videos/**
 playlist.json
 favorites-playlists.json
+.venv/
+library.db
+thumbnails/**
+__pycache__/
+*.pyc
+.pytest_cache/
+yolov8n.pt
+legacy-node/node_modules/

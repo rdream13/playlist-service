@@ -1,29 +1,40 @@
 
     "IPv4 Address":"192.168.50.117"
 
-    
+
+=== START THE APP (Python/FastAPI - current, since 2026-09-20 migration) ===
 cd d:\playlist-service
-npm start
+$env:PORT='3000'
+.\.venv\Scripts\python.exe -m app.main
+
+Then browse to http://localhost:3000/loveshack (or http://192.168.50.117:3000/loveshack from other devices on the LAN).
 
 
+=== STOP THE APP ===
+If it is running in the foreground terminal, press Ctrl+C.
 
-Get-Process | Where-Object { $_.ProcessName -match 'yt|youtube|ffmpeg' } | Select-Object Id, ProcessName | Sort-Object ProcessName | Format-Table -AutoSize | Out-String
-Fastest ways to stop it on Windows PowerShell:
+If it is still running in the background, find it first:
+Get-Process | Where-Object { $_.ProcessName -match 'python|ffmpeg|yt-dlp|youtube' } | Select-Object Id, ProcessName, Path
 
-Get-Process | Where-Object { $_.ProcessName -match 'node|ffmpeg|yt-dlp|youtube' } | Select-Object Id, ProcessName, Path
-
+Then stop the specific PID:
 Stop-Process -Id <PID> -Force
 
-Stop-Process -Id 8384 -Force
-Stop-Process -Id 96624 -Force
-
-taskkill /F /IM node.exe;
+Or nuke everything matching by name (use with care - kills ALL python/ffmpeg processes, not just this app):
+taskkill /F /IM python.exe;
 taskkill /F /IM ffmpeg.exe;
 
 
+=== RUN TESTS ===
+cd d:\playlist-service
+.\.venv\Scripts\python.exe -m pytest test_python -v
 
-If it is running in the foreground terminal, press Ctrl+C.
-If it is still running in background, run:
-Stop-Process -Id 107104 -Force
-Alternative:
-taskkill /PID 107104 /F
+
+=== LEGACY NODE APP (archived in legacy-node/, kept for reference/rollback only) ===
+cd d:\playlist-service\legacy-node
+npm start
+
+Stop it the same way, but matching node.exe instead of python.exe:
+Get-Process | Where-Object { $_.ProcessName -match 'node|ffmpeg|yt-dlp|youtube' } | Select-Object Id, ProcessName, Path
+Stop-Process -Id <PID> -Force
+taskkill /F /IM node.exe;
+taskkill /F /IM ffmpeg.exe;
