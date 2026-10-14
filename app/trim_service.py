@@ -27,6 +27,24 @@ def _is_finite(value) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value)
 
 
+def parse_segment_group(raw) -> Optional[int]:
+    """Whole number >= 1; a missing group means group 1. Returns None when invalid."""
+    if raw is None:
+        return 1
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return int(value) if value.is_integer() and value >= 1 else None
+
+
+def order_segments_by_group(segments: list[dict]) -> list[dict]:
+    """Group 1 scenes first, then group 2, ...; scenes inside a group keep time order."""
+    return sorted(segments, key=lambda seg: (seg.get("group", 1), seg["start"]))
+
+
 async def perform_trim(
     video_name: str,
     start: str,
@@ -59,10 +77,14 @@ async def perform_trim(
         for segment in raw_segments:
             try:
                 normalized_segments.append(
-                    {"start": float(segment.get("start")), "end": float(segment.get("end"))}
+                    {
+                        "start": float(segment.get("start")),
+                        "end": float(segment.get("end")),
+                        "group": parse_segment_group(segment.get("group")),
+                    }
                 )
             except (TypeError, ValueError, AttributeError):
-                normalized_segments.append({"start": float("nan"), "end": float("nan")})
+                normalized_segments.append({"start": float("nan"), "end": float("nan"), "group": 1})
         normalized_segments.sort(key=lambda seg: seg["start"])
 
     if mode == "remove-scene" and len(normalized_segments) != 1:
@@ -82,6 +104,10 @@ async def perform_trim(
         for index in range(len(normalized_segments))
     ):
         raise ApiError(400, "Scene ranges must not overlap.")
+    if mode == "keep-scenes":
+        if any(seg["group"] is None for seg in normalized_segments):
+            raise ApiError(400, "Scene groups must be whole numbers of 1 or higher.")
+        normalized_segments = order_segments_by_group(normalized_segments)
 
     try:
         base, full = safe_video_path(video_name)

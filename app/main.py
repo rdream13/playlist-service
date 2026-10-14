@@ -68,7 +68,17 @@ async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"error": exc.message})
 
 
-app.mount("/assets", StaticFiles(directory=str(PUBLIC_DIR)), name="assets")
+class RevalidatingStaticFiles(StaticFiles):
+    # Without this, browsers heuristically cache JS/CSS and keep running stale frontend code.
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+_NO_CACHE = {"Cache-Control": "no-cache"}
+
+app.mount("/assets", RevalidatingStaticFiles(directory=str(PUBLIC_DIR)), name="assets")
 app.mount("/media", StaticFiles(directory=str(VIDEOS_DIR)), name="media")
 
 _PAGE_ROUTES = {
@@ -83,7 +93,7 @@ _PAGE_ROUTES = {
 for route_path, file_name in _PAGE_ROUTES.items():
     def _make_handler(html_file: str):
         def _handler() -> FileResponse:
-            return FileResponse(str(PUBLIC_DIR / html_file))
+            return FileResponse(str(PUBLIC_DIR / html_file), headers=_NO_CACHE)
         return _handler
 
     app.get(route_path)(_make_handler(file_name))
@@ -91,7 +101,7 @@ for route_path, file_name in _PAGE_ROUTES.items():
 
 @app.get("/")
 def root() -> FileResponse:
-    return FileResponse(str(PUBLIC_DIR / "loveshack.html"))
+    return FileResponse(str(PUBLIC_DIR / "loveshack.html"), headers=_NO_CACHE)
 
 
 class RenameBody(BaseModel):

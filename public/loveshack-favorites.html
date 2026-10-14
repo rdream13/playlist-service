@@ -58,10 +58,19 @@
           <button class="btn tiny move-up" title="Move up">↑</button>
           <button class="btn tiny move-down" title="Move down">↓</button>
           <button class="btn tiny to-main" title="Move to top of main playlist">To Main</button>
+          <button class="btn tiny copy" title="Copy to another playlist">Copy</button>
           <button class="btn tiny rename" title="Rename video">Rename</button>
           <button class="btn tiny edit">Edit</button>
           <button class="btn tiny play">Play</button>
           <button class="btn tiny danger remove">Remove</button>
+        </div>
+        <div class="copy-panel" hidden>
+          <select class="copy-target">
+            <option value="">Copy to playlist...</option>
+          </select>
+          <input class="copy-new" type="text" maxlength="80" placeholder="Or new playlist name" />
+          <button class="btn tiny btn-primary copy-confirm" type="button">Copy</button>
+          <button class="btn tiny copy-cancel" type="button">Cancel</button>
         </div>
       </li>
     </template>

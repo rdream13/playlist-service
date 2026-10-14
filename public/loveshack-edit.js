@@ -30,6 +30,7 @@ const el = {
   stitchClipRows: document.getElementById('stitchClipRows'),
   addStitchClipBtn: document.getElementById('addStitchClipBtn'),
   trimPreview: document.getElementById('trimPreview'),
+  sceneSliders: document.getElementById('sceneSliders'),
   trimDuration: document.getElementById('trimDuration'),
   trimStatus: document.getElementById('trimStatus'),
   trimPresetButtons: Array.from(document.querySelectorAll('.trim-preset')),
@@ -41,7 +42,13 @@ const el = {
   scene1MetadataGroup: document.getElementById('scene1MetadataGroup'),
   scene1Category: document.getElementById('scene1Category'),
   scene1People: document.getElementById('scene1People'),
-  scene1Keywords: document.getElementById('scene1Keywords')
+  scene1Keywords: document.getElementById('scene1Keywords'),
+  scene1GroupField: document.getElementById('scene1GroupField'),
+  scene1Group: document.getElementById('scene1Group'),
+  groupOrderSummary: document.getElementById('groupOrderSummary'),
+  groupSaveOptions: document.getElementById('groupSaveOptions'),
+  splitByGroup: document.getElementById('splitByGroup'),
+  groupPlaylistRows: document.getElementById('groupPlaylistRows')
 };
 
 el.trimSubmit = el.trimForm.querySelector('button[type="submit"]');
@@ -218,6 +225,7 @@ function populateFavoritesSelect() {
   fillPlaylistSelect(el.trimPlaylistSelect);
   fillPlaylistSelect(el.scene1PlaylistSelect);
   getSceneRows().forEach((row) => fillPlaylistSelect(row.querySelector('.scene-row-playlist-select')));
+  el.groupPlaylistRows.querySelectorAll('select').forEach(fillPlaylistSelect);
   getStitchClipRows().forEach((row) => {
     const playlistSelect = row.querySelector('.stitch-clip-playlist-select');
     const videoSelect = row.querySelector('.stitch-clip-video-select');
@@ -273,7 +281,333 @@ function fillClipVideoSelect(selectEl, sourceValue) {
   }
 }
 
+const SLIDER_MIN_GAP = 1;
+const SLIDER_THUMB_PX = 16;
+
+function getScenePairs() {
+  return [
+    { startInput: el.trimStart, endInput: el.trimEnd },
+    ...getSceneRows().map((row) => ({
+      startInput: row.querySelector('.scene-row-start'),
+      endInput: row.querySelector('.scene-row-end')
+    }))
+  ];
+}
+
+function getVisibleScenePairs() {
+  const pairs = getScenePairs();
+  return el.trimEditMode.value === 'remove-scene' ? pairs.slice(0, 1) : pairs;
+}
+
+function readScene(pair) {
+  return {
+    start: parseTimeString(pair.startInput.value),
+    end: parseTimeString(pair.endInput.value)
+  };
+}
+
+function clampValue(value, lo, hi) {
+  return Math.min(Math.max(value, lo), Math.max(hi, lo));
+}
+
+// Scenes stay in order: a scene can't start before the previous one ends or end after the next one starts.
+function getSceneBounds(index) {
+  const pairs = getVisibleScenePairs();
+  const duration = Math.floor(state.currentDuration || 0);
+  let lower = 0;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const { end } = readScene(pairs[i]);
+    if (end !== null) {
+      lower = end;
+      break;
+    }
+  }
+  let upper = duration;
+  for (let i = index + 1; i < pairs.length; i += 1) {
+    const { start } = readScene(pairs[i]);
+    if (start !== null) {
+      upper = start;
+      break;
+    }
+  }
+  lower = Math.min(lower, duration);
+  return { lower, upper: Math.max(upper, lower) };
+}
+
+function setSceneTime(index, which, rawValue) {
+  const pair = getVisibleScenePairs()[index];
+  if (!pair) {
+    return 0;
+  }
+
+  const { lower, upper } = getSceneBounds(index);
+  const current = readScene(pair);
+  const value = Math.round(rawValue);
+  let start = current.start;
+  let end = current.end;
+
+  if (which === 'start') {
+    end = end === null ? upper : end;
+    start = clampValue(value, lower, end - SLIDER_MIN_GAP);
+    end = Math.max(end, start);
+  } else {
+    start = start === null ? lower : start;
+    end = clampValue(value, start + SLIDER_MIN_GAP, upper);
+  }
+
+  pair.startInput.value = formatTimeLabel(start);
+  pair.endInput.value = formatTimeLabel(end);
+  updateTrimRangeStatus();
+  return which === 'start' ? start : end;
+}
+
+function seekPreview(seconds) {
+  if (state.currentDuration > 0) {
+    el.trimPreview.currentTime = seconds;
+  }
+}
+
+function createSceneSlider() {
+  const slider = document.createElement('div');
+  slider.className = 'scene-slider';
+  slider.innerHTML = `
+    <div class="scene-slider-head">
+      <span class="scene-slider-label"></span>
+      <span class="scene-slider-readout"></span>
+    </div>
+    <div class="scene-slider-track">
+      <div class="scene-slider-fill"></div>
+      <div class="scene-slider-playhead" hidden></div>
+      <input class="scene-slider-start" type="range" min="0" step="1" value="0" aria-label="Scene start" />
+      <input class="scene-slider-end" type="range" min="0" step="1" value="0" aria-label="Scene end" />
+    </div>
+    <div class="scene-slider-actions">
+      <button class="btn tiny scene-slider-set-start" type="button">Start = now</button>
+      <button class="btn tiny scene-slider-set-end" type="button">End = now</button>
+    </div>
+  `;
+
+  const indexOfSlider = () => Array.from(el.sceneSliders.children).indexOf(slider);
+
+  slider.querySelector('.scene-slider-start').addEventListener('input', (event) => {
+    seekPreview(setSceneTime(indexOfSlider(), 'start', Number(event.target.value)));
+  });
+  slider.querySelector('.scene-slider-end').addEventListener('input', (event) => {
+    seekPreview(setSceneTime(indexOfSlider(), 'end', Number(event.target.value)));
+  });
+  slider.querySelector('.scene-slider-set-start').addEventListener('click', () => {
+    setSceneTime(indexOfSlider(), 'start', el.trimPreview.currentTime);
+  });
+  slider.querySelector('.scene-slider-set-end').addEventListener('click', () => {
+    setSceneTime(indexOfSlider(), 'end', el.trimPreview.currentTime);
+  });
+
+  return slider;
+}
+
+function sliderPosition(seconds, max) {
+  const percent = max > 0 ? (seconds / max) * 100 : 0;
+  return `calc(${percent}% + ${(0.5 - percent / 100) * SLIDER_THUMB_PX}px)`;
+}
+
+function renderSceneSliders() {
+  const pairs = getVisibleScenePairs();
+  const stitchClips = el.trimEditMode.value === 'stitch-clips';
+  const removing = el.trimEditMode.value === 'remove-scene';
+  const duration = Math.floor(state.currentDuration || 0);
+
+  el.sceneSliders.hidden = stitchClips;
+
+  while (el.sceneSliders.children.length > pairs.length) {
+    el.sceneSliders.lastElementChild.remove();
+  }
+  while (el.sceneSliders.children.length < pairs.length) {
+    el.sceneSliders.appendChild(createSceneSlider());
+  }
+
+  pairs.forEach((pair, index) => {
+    const slider = el.sceneSliders.children[index];
+    const { lower } = getSceneBounds(index);
+    const parsed = readScene(pair);
+    const start = clampValue(parsed.start === null ? lower : parsed.start, 0, duration);
+    const end = clampValue(parsed.end === null ? start : parsed.end, start, duration);
+
+    const startInput = slider.querySelector('.scene-slider-start');
+    const endInput = slider.querySelector('.scene-slider-end');
+    [startInput, endInput].forEach((input) => {
+      input.max = String(duration);
+      input.disabled = duration <= 0;
+    });
+    startInput.value = String(start);
+    endInput.value = String(end);
+    // Keep whichever thumb is reachable when both sit close together.
+    startInput.style.zIndex = start > duration / 2 ? '4' : '2';
+    endInput.style.zIndex = '3';
+
+    const fill = slider.querySelector('.scene-slider-fill');
+    fill.style.left = sliderPosition(start, duration);
+    fill.style.width = `calc(${sliderPosition(end, duration)} - ${sliderPosition(start, duration)})`;
+
+    slider.querySelector('.scene-slider-label').textContent = removing
+      ? 'Scene to remove'
+      : isGroupingMode() && pairs.length > 1
+        ? `Scene ${index + 1} - Group ${getGroupInputs()[index]?.value || 1}`
+        : `Scene ${index + 1}`;
+    slider.querySelector('.scene-slider-readout').textContent =
+      parsed.start !== null && parsed.end !== null
+        ? `${formatTimeLabel(parsed.start)} - ${formatTimeLabel(parsed.end)}`
+        : 'not set';
+    slider.querySelectorAll('button').forEach((button) => {
+      button.disabled = duration <= 0;
+    });
+  });
+  updatePlayheads();
+}
+
+// Only the slider whose scene contains the current time shows the playhead.
+function updatePlayheads() {
+  const time = el.trimPreview.currentTime || 0;
+  const duration = Math.floor(state.currentDuration || 0);
+  let activeFound = false;
+
+  getVisibleScenePairs().forEach((pair, index) => {
+    const slider = el.sceneSliders.children[index];
+    if (!slider) {
+      return;
+    }
+    const { start, end } = readScene(pair);
+    const active =
+      !activeFound && duration > 0 && start !== null && end !== null && time >= start && time <= end;
+    activeFound = activeFound || active;
+
+    slider.classList.toggle('is-active', active);
+    const playhead = slider.querySelector('.scene-slider-playhead');
+    playhead.hidden = !active;
+    if (active) {
+      playhead.style.left = sliderPosition(time, duration);
+    }
+  });
+}
+
+let playheadFrame = null;
+
+function tickPlayheads() {
+  updatePlayheads();
+  playheadFrame = el.trimPreview.paused ? null : requestAnimationFrame(tickPlayheads);
+}
+
+function startPlayheadLoop() {
+  if (playheadFrame === null) {
+    playheadFrame = requestAnimationFrame(tickPlayheads);
+  }
+}
+
+function isGroupingMode() {
+  return el.trimEditMode.value === 'keep-scenes';
+}
+
+function getGroupInputs() {
+  return [el.scene1Group, ...getSceneRows().map((row) => row.querySelector('.scene-row-group-input'))];
+}
+
+function readSceneGroup(input) {
+  const value = Number(input?.value);
+  return Number.isInteger(value) && value >= 1 ? value : null;
+}
+
+// Scene labels per group, keys ascending; scenes inside a group are in time order (same as the server).
+function getGroupMembers() {
+  const groupInputs = getGroupInputs();
+  const scenes = getScenePairs().map((pair, index) => ({
+    label: `S${index + 1}`,
+    group: readSceneGroup(groupInputs[index]),
+    start: readScene(pair).start ?? Number.POSITIVE_INFINITY
+  }));
+
+  if (scenes.some((scene) => scene.group === null)) {
+    return null;
+  }
+
+  const byGroup = new Map();
+  scenes
+    .sort((a, b) => a.group - b.group || a.start - b.start)
+    .forEach((scene) => {
+      byGroup.set(scene.group, [...(byGroup.get(scene.group) || []), scene.label]);
+    });
+  return byGroup;
+}
+
+function isSplitByGroup() {
+  return isGroupingMode() && el.splitByGroup.checked;
+}
+
+// Rebuilt only when the set of groups changes, carrying over what was already chosen or typed.
+function renderGroupPlaylistRows(members) {
+  const container = el.groupPlaylistRows;
+  container.hidden = !members;
+  if (!members) {
+    return;
+  }
+
+  const key = [...members].map(([group, labels]) => `${group}:${labels.join(',')}`).join('|');
+  if (container.dataset.key === key) {
+    return;
+  }
+
+  const previous = new Map(
+    Array.from(container.children).map((row) => [
+      row.dataset.group,
+      { selected: row.querySelector('select').value, typed: row.querySelector('input').value }
+    ])
+  );
+
+  container.innerHTML = '';
+  members.forEach((labels, group) => {
+    const row = document.createElement('div');
+    row.className = 'scene-row-playlist group-playlist-row';
+    row.dataset.group = String(group);
+    row.innerHTML = `
+      <label class="scene-row-playlist-label">Group ${group} playlist (${labels.join(', ')})</label>
+      <select>
+        <option value="">Choose existing playlist...</option>
+      </select>
+      <input type="text" maxlength="80" placeholder="Or new playlist name" />
+    `;
+    const select = row.querySelector('select');
+    fillPlaylistSelect(select);
+    const saved = previous.get(String(group));
+    if (saved) {
+      select.value = saved.selected;
+      row.querySelector('input').value = saved.typed;
+    }
+    container.appendChild(row);
+  });
+  container.dataset.key = key;
+}
+
+function updateGroupSummary() {
+  const grouping = isGroupingMode();
+  const members = grouping ? getGroupMembers() : null;
+
+  if (!grouping || getScenePairs().length < 2) {
+    el.groupOrderSummary.hidden = true;
+  } else if (!members) {
+    el.groupOrderSummary.textContent = 'Scene groups must be whole numbers of 1 or higher.';
+    el.groupOrderSummary.hidden = false;
+  } else {
+    const entries = [...members];
+    el.groupOrderSummary.textContent = isSplitByGroup()
+      ? `Videos: ${entries.map(([group, labels]) => `Group ${group} = ${labels.join(', ')}`).join('; ')}`
+      : `Order: ${entries.map(([, labels]) => labels.join(', ')).join(' \u2192 ')}`;
+    el.groupOrderSummary.hidden = false;
+  }
+
+  renderGroupPlaylistRows(isSplitByGroup() ? members : null);
+}
+
 function updateTrimRangeStatus() {
+  renderSceneSliders();
+  updateGroupSummary();
   const start = parseTimeString(el.trimStart.value);
   const end = parseTimeString(el.trimEnd.value);
 
@@ -308,10 +642,16 @@ function updateEditModeFields() {
   el.stitchClipsGroup.hidden = !stitchClips;
 
   el.scene1PlaylistGroup.hidden = !separate;
-  el.globalPlaylistGroup.hidden = separate;
+  el.scene1GroupField.hidden = !isGroupingMode();
+  el.groupSaveOptions.hidden = !isGroupingMode();
+  el.globalPlaylistGroup.hidden = separate || isSplitByGroup();
   el.clipMetadataGroup.hidden = separate;
   el.scene1MetadataGroup.hidden = !separate;
   getSceneRows().forEach((row) => {
+    const groupField = row.querySelector('.scene-row-group');
+    if (groupField) {
+      groupField.hidden = !isGroupingMode();
+    }
     const playlistGroup = row.querySelector('.scene-row-playlist');
     if (playlistGroup) {
       playlistGroup.hidden = !separate;
@@ -326,11 +666,13 @@ function updateEditModeFields() {
     ? 'Remove scene and save'
     : separate
       ? 'Save each scene to its own playlist'
-      : stitchClips
-        ? 'Stitch clips and save'
-        : getSceneRows().length > 1
-          ? 'Stitch scenes and save'
-          : 'Save trimmed clip';
+      : isSplitByGroup()
+        ? 'Save each group to its playlist'
+        : stitchClips
+          ? 'Stitch clips and save'
+          : getSceneRows().length > 1
+            ? 'Stitch scenes and save'
+            : 'Save trimmed clip';
   el.trimStartLabel.textContent = removing ? 'Scene to remove start' : 'Scene 1 start';
   el.trimEndLabel.textContent = removing ? 'Scene to remove end' : 'Scene 1 end';
   updateTrimRangeStatus();
@@ -404,6 +746,7 @@ function renumberSceneRows() {
     const sceneNumber = index + 2;
     row.querySelector('.scene-row-start-label').textContent = `Scene ${sceneNumber} start`;
     row.querySelector('.scene-row-end-label').textContent = `Scene ${sceneNumber} end`;
+    row.querySelector('.scene-row-group-label').textContent = `Scene ${sceneNumber} group`;
     const playlistLabel = row.querySelector('.scene-row-playlist-label');
     if (playlistLabel) {
       playlistLabel.textContent = `Scene ${sceneNumber} playlist`;
@@ -436,6 +779,10 @@ function addSceneRow() {
       <label class="scene-row-end-label">Scene ${sceneNumber} end</label>
       <input class="scene-row-end" type="text" placeholder="00:02:00" />
     </div>
+    <div class="scene-row-group" hidden>
+      <label class="scene-row-group-label">Scene ${sceneNumber} group</label>
+      <input class="scene-row-group-input" type="number" min="1" step="1" value="1" />
+    </div>
     <div class="scene-row-playlist" hidden>
       <label class="scene-row-playlist-label">Scene ${sceneNumber} playlist</label>
       <select class="scene-row-playlist-select">
@@ -462,6 +809,15 @@ function addSceneRow() {
   row.querySelectorAll('input').forEach((input) => {
     input.addEventListener('input', updateTrimRangeStatus);
   });
+
+  // Seed the new scene right after the previous one when there is room.
+  const previousPair = getScenePairs().pop();
+  const previousEnd = parseTimeString(previousPair.endInput.value);
+  const duration = Math.floor(state.currentDuration || 0);
+  if (previousEnd !== null && previousEnd + SLIDER_MIN_GAP <= duration) {
+    row.querySelector('.scene-row-start').value = formatTimeLabel(previousEnd);
+    row.querySelector('.scene-row-end').value = formatTimeLabel(Math.min(previousEnd + 30, duration));
+  }
   el.extraScenes.appendChild(row);
   updateEditModeFields();
 }
@@ -476,9 +832,13 @@ function parseSceneRange(startInput, endInput) {
 }
 
 function collectSceneRanges() {
-  const first = parseSceneRange(el.trimStart.value, el.trimEnd.value);
+  const withGroup = (range, groupInput) => (range ? { ...range, group: readSceneGroup(groupInput) } : range);
+  const first = withGroup(parseSceneRange(el.trimStart.value, el.trimEnd.value), el.scene1Group);
   const extras = getSceneRows().map((row) =>
-    parseSceneRange(row.querySelector('.scene-row-start').value, row.querySelector('.scene-row-end').value)
+    withGroup(
+      parseSceneRange(row.querySelector('.scene-row-start').value, row.querySelector('.scene-row-end').value),
+      row.querySelector('.scene-row-group-input')
+    )
   );
   return [first, ...extras];
 }
@@ -491,6 +851,7 @@ function previewSelectedVideo(videoName) {
     el.trimPreview.removeAttribute('src');
     state.currentDuration = 0;
     el.trimDuration.textContent = 'Duration: --:--:--';
+    renderSceneSliders();
     return;
   }
 
@@ -503,6 +864,11 @@ function previewSelectedVideo(videoName) {
     const defaultEnd = state.currentDuration > 0 ? state.currentDuration : 30;
     el.trimEnd.value = formatTimeLabel(defaultEnd);
     el.trimStart.value = '00:00:00';
+    // Extra scene times belonged to the previous video.
+    getSceneRows().forEach((row) => {
+      row.querySelector('.scene-row-start').value = '';
+      row.querySelector('.scene-row-end').value = '';
+    });
     el.trimDuration.textContent = `Duration: ${formatTimeLabel(state.currentDuration)}`;
     updateTrimRangeStatus();
   };
@@ -676,6 +1042,110 @@ async function handleStitchClipsSubmit() {
   }
 }
 
+// Returns an error message, or null when the scenes are usable.
+function validateSceneSet(scenes) {
+  if (scenes.some((scene) => !scene)) {
+    return 'Enter valid start and end times for every scene.';
+  }
+  if (scenes.some((scene) => scene.group === null)) {
+    return 'Scene groups must be whole numbers of 1 or higher.';
+  }
+  const byTime = [...scenes].sort((a, b) => a.start - b.start);
+  if (byTime.some((scene, index) => index > 0 && scene.start < byTime[index - 1].end)) {
+    return 'Scene ranges must not overlap.';
+  }
+  if (state.currentDuration > 0 && byTime.some((scene) => scene.end > state.currentDuration)) {
+    return `All selected times must stay within the video length of ${formatTimeLabel(state.currentDuration)}.`;
+  }
+  return null;
+}
+
+// One stitched video per group, each saved to that group's own playlist.
+async function handleGroupedSubmit(videoName) {
+  const scenes = collectSceneRanges();
+  const problem = validateSceneSet(scenes);
+  if (problem) {
+    setTrimStatus(problem, 'error');
+    return;
+  }
+
+  const byGroup = new Map();
+  scenes.forEach((scene) => {
+    byGroup.set(scene.group, [...(byGroup.get(scene.group) || []), scene]);
+  });
+  const groupNumbers = [...byGroup.keys()].sort((a, b) => a - b);
+
+  const playlistByGroup = new Map(
+    Array.from(el.groupPlaylistRows.children).map((row) => [
+      Number(row.dataset.group),
+      resolvePlaylistFromInputs(row.querySelector('select'), row.querySelector('input'))
+    ])
+  );
+  if (groupNumbers.some((group) => !playlistByGroup.get(group))) {
+    setTrimStatus('Choose or create a favorites playlist for every group.', 'error');
+    return;
+  }
+
+  const metadata = collectClipMetadata();
+  let savedCount = 0;
+  for (let index = 0; index < groupNumbers.length; index += 1) {
+    const group = groupNumbers[index];
+    const groupScenes = byGroup.get(group).sort((a, b) => a.start - b.start);
+    const playlistName = playlistByGroup.get(group);
+    const first = groupScenes[0];
+    const last = groupScenes[groupScenes.length - 1];
+    setTrimStatus(
+      `Saving group ${group} (${index + 1} of ${groupNumbers.length}) to "${playlistName}"...`,
+      'neutral'
+    );
+
+    const body =
+      groupScenes.length > 1
+        ? {
+            videoName,
+            start: String(first.start),
+            end: String(last.end),
+            playlistName,
+            mode: 'keep-scenes',
+            segments: groupScenes.map(({ start, end }) => ({ start, end })),
+            ...metadata
+          }
+        : { videoName, start: String(first.start), end: String(first.end), playlistName, mode: 'single', ...metadata };
+
+    try {
+      const res = await fetch('/api/videos/trim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `Group ${group} failed.`);
+      }
+      savedCount += 1;
+    } catch (error) {
+      setTrimStatus(
+        `Saved ${savedCount} of ${groupNumbers.length} group video(s). Group ${group} failed: ${error.message}`,
+        'error'
+      );
+      await fetchFavoritesPlaylists();
+      await fetchVideos();
+      return;
+    }
+  }
+
+  setTrimStatus(`Saved ${savedCount} group video(s), each to its own favorites playlist.`, 'success');
+  el.extraScenes.innerHTML = '';
+  el.scene1Group.value = '1';
+  el.groupPlaylistRows.innerHTML = '';
+  delete el.groupPlaylistRows.dataset.key;
+  clearClipMetadataFields();
+  updateEditModeFields();
+  await fetchFavoritesPlaylists();
+  await fetchVideos();
+  previewSelectedVideo(videoName);
+}
+
 async function handleTrimSubmit(event) {
   event.preventDefault();
 
@@ -693,6 +1163,11 @@ async function handleTrimSubmit(event) {
 
   if (el.trimEditMode.value === 'keep-separate') {
     await handleKeepSeparateSubmit(videoName);
+    return;
+  }
+
+  if (isSplitByGroup()) {
+    await handleGroupedSubmit(videoName);
     return;
   }
 
@@ -732,22 +1207,12 @@ async function handleTrimSubmit(event) {
   let effectiveMode = mode;
   if (!removing) {
     const candidateSegments = collectSceneRanges();
-    if (candidateSegments.some((segment) => !segment)) {
-      setTrimStatus('Enter valid start and end times for every scene.', 'error');
+    const problem = validateSceneSet(candidateSegments);
+    if (problem) {
+      setTrimStatus(problem, 'error');
       return;
     }
     candidateSegments.sort((a, b) => a.start - b.start);
-    if (candidateSegments.some((segment, index) => index > 0 && segment.start < candidateSegments[index - 1].end)) {
-      setTrimStatus('Scene ranges must not overlap.', 'error');
-      return;
-    }
-    if (state.currentDuration > 0 && candidateSegments.some((segment) => segment.end > state.currentDuration)) {
-      setTrimStatus(
-        `All selected times must stay within the video length of ${formatTimeLabel(state.currentDuration)}.`,
-        'error'
-      );
-      return;
-    }
     if (candidateSegments.length > 1) {
       segments = candidateSegments;
       effectiveMode = 'keep-scenes';
@@ -780,6 +1245,7 @@ async function handleTrimSubmit(event) {
     el.trimNewPlaylist.value = '';
     el.trimPlaylistSelect.value = '';
     el.extraScenes.innerHTML = '';
+    el.scene1Group.value = '1';
     clearClipMetadataFields();
     updateEditModeFields();
     await fetchFavoritesPlaylists();
@@ -834,6 +1300,15 @@ el.trimVideoSelect.addEventListener('change', (event) => {
 });
 
 el.trimEditMode.addEventListener('change', updateEditModeFields);
+
+el.scene1Group.addEventListener('input', updateTrimRangeStatus);
+el.splitByGroup.addEventListener('change', updateEditModeFields);
+
+el.trimPreview.addEventListener('play', startPlayheadLoop);
+el.trimPreview.addEventListener('playing', startPlayheadLoop);
+['pause', 'ended', 'seeked', 'timeupdate', 'loadedmetadata'].forEach((name) => {
+  el.trimPreview.addEventListener(name, updatePlayheads);
+});
 
 el.addSceneBtn.addEventListener('click', addSceneRow);
 

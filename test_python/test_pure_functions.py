@@ -8,6 +8,7 @@ import math
 from app.ffmpeg_utils import build_mix_video_name, build_multi_scene_video_name
 from app.inuse import is_video_in_use, mark_videos_in_use, unmark_videos_in_use
 from app.mix_plan import build_mix_plan, compute_video_segments
+from app.trim_service import order_segments_by_group, parse_segment_group
 from app.video_utils import build_trimmed_video_name, is_temporary_trim_file, parse_time_to_seconds
 
 
@@ -51,6 +52,34 @@ def test_multi_scene_outputs_identify_edit_mode_and_ranges():
         build_multi_scene_video_name("example.mp4", "join-two", [{"start": 10, "end": 20}, {"start": 30, "end": 40}])
         == "example [join 00-00-10_00-00-20__00-00-30_00-00-40].mp4"
     )
+
+
+def test_scenes_are_ordered_by_group_then_time():
+    scenes = [
+        {"start": 10, "end": 20, "group": 1},
+        {"start": 30, "end": 40, "group": 2},
+        {"start": 50, "end": 60, "group": 1},
+        {"start": 70, "end": 80, "group": 2},
+        {"start": 90, "end": 100, "group": 1},
+        {"start": 110, "end": 120, "group": 3},
+    ]
+    ordered = order_segments_by_group(scenes)
+    assert [seg["start"] for seg in ordered] == [10, 50, 90, 30, 70, 110]
+
+
+def test_scenes_without_groups_keep_time_order():
+    scenes = [{"start": 10, "end": 20}, {"start": 30, "end": 40}]
+    assert order_segments_by_group(scenes) == scenes
+
+
+def test_segment_group_parsing():
+    assert parse_segment_group(None) == 1
+    assert parse_segment_group(3) == 3
+    assert parse_segment_group("2") == 2
+    assert parse_segment_group(0) is None
+    assert parse_segment_group(1.5) is None
+    assert parse_segment_group("abc") is None
+    assert parse_segment_group(True) is None
 
 
 def test_time_parsing_accepts_standard_hhmmss_values():

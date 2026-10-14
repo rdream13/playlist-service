@@ -167,6 +167,23 @@ async function sendVideoToMainPlaylist(videoName) {
   }
 }
 
+async function copyVideoToPlaylist(videoName, playlistName) {
+  const res = await fetch('/api/favorites/add', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ videoName, playlistName })
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || data.detail || 'Failed to copy to playlist.');
+  }
+
+  state.playlists = data.playlists || state.playlists;
+}
+
 async function renameFavoriteVideo(oldName) {
   const newName = prompt('Rename video to:', oldName);
   if (!newName || newName.trim() === oldName) {
@@ -285,6 +302,53 @@ function renderPlaylists() {
       row.querySelector('.rename').addEventListener('click', async () => {
         try {
           await renameFavoriteVideo(video.name);
+        } catch (err) {
+          el.status.textContent = err.message;
+        }
+      });
+
+      const copyPanel = row.querySelector('.copy-panel');
+      const copyTarget = row.querySelector('.copy-target');
+      const copyNew = row.querySelector('.copy-new');
+
+      row.querySelector('.copy').addEventListener('click', () => {
+        copyTarget.innerHTML = '<option value="">Copy to playlist...</option>';
+        state.playlists
+          .filter((other) => other.name !== playlist.name)
+          .forEach((other) => {
+            const option = document.createElement('option');
+            option.value = other.name;
+            option.textContent = `${other.name} (${other.count})`;
+            copyTarget.appendChild(option);
+          });
+        copyPanel.hidden = !copyPanel.hidden;
+      });
+
+      row.querySelector('.copy-cancel').addEventListener('click', () => {
+        copyPanel.hidden = true;
+      });
+
+      row.querySelector('.copy-confirm').addEventListener('click', async () => {
+        const targetName = copyNew.value.trim() || copyTarget.value;
+        if (!targetName) {
+          el.status.textContent = 'Choose a playlist or enter a new playlist name to copy to.';
+          return;
+        }
+        if (targetName.toLowerCase() === playlist.name.toLowerCase()) {
+          el.status.textContent = 'Choose a different playlist than the one this video is already in.';
+          return;
+        }
+
+        const target = state.playlists.find((other) => other.name.toLowerCase() === targetName.toLowerCase());
+        if (target && target.items.some((item) => item.name === video.name)) {
+          el.status.textContent = `${video.name} is already in ${target.name}.`;
+          return;
+        }
+
+        try {
+          await copyVideoToPlaylist(video.name, targetName);
+          renderPlaylists();
+          el.status.textContent = `Copied ${video.name} to ${targetName}.`;
         } catch (err) {
           el.status.textContent = err.message;
         }
