@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -187,17 +188,34 @@ def get_all_videos() -> dict:
     return {"videos": list_all_video_files()}
 
 
+def _unique_video_path(name: str) -> Path:
+    candidate = VIDEOS_DIR / name
+    stem, suffix = Path(name).stem, Path(name).suffix
+    counter = 1
+    while candidate.exists():
+        candidate = VIDEOS_DIR / f"{stem} ({counter}){suffix}"
+        counter += 1
+    return candidate
+
+
+# Plain `def` so FastAPI runs it in a worker thread; a large copy must not block the event loop.
 @app.post("/api/videos/upload", status_code=201)
-async def upload_video(video: UploadFile = File(...)) -> dict:
+def upload_video(video: UploadFile = File(...)) -> dict:
     if not video.filename or not is_allowed_video(video.filename):
         raise HTTPException(status_code=400, detail="Only video files are allowed.")
 
-    base = Path(video.filename).name
-    target = VIDEOS_DIR / base
-    with target.open("wb") as out_file:
-        shutil.copyfileobj(video.file, out_file)
+    target = _unique_video_path(Path(video.filename).name)
+    # Not a video extension, so a half-written upload never shows up in playlists.
+    partial = VIDEOS_DIR / f"{target.name}.upload-{uuid.uuid4().hex}.part"
+    try:
+        with partial.open("wb") as out_file:
+            shutil.copyfileobj(video.file, out_file, 1024 * 1024)
+        partial.replace(target)
+    except Exception as exc:
+        partial.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Could not save the upload: {exc}")
 
-    return {"message": "Uploaded.", "videos": list_videos()}
+    return {"message": "Uploaded.", "name": target.name, "videos": list_videos()}
 
 
 @app.delete("/api/videos/{name}")

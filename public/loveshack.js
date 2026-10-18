@@ -309,22 +309,48 @@ el.player.addEventListener('ended', () => {
   playVideo(state.playQueue[state.playingIndex]);
 });
 
-async function uploadVideo(file) {
-  const fd = new FormData();
-  fd.append('video', file);
+function uploadVideo(file) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('video', file);
 
-  const res = await fetch('/api/videos/upload', {
-    method: 'POST',
-    body: fd
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/videos/upload');
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        el.status.textContent = `Uploading ${file.name}: ${Math.round((event.loaded / event.total) * 100)}%`;
+      }
+    };
+    xhr.upload.onload = () => {
+      el.status.textContent = `Saving ${file.name} on the server...`;
+    };
+    xhr.onerror = () => reject(new Error('Upload failed: lost connection to the server.'));
+    xhr.onload = async () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        // Non-JSON error body (e.g. a plain 500 page).
+      }
+
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const detail = typeof data.detail === 'string' ? data.detail : '';
+        reject(new Error(data.error || detail || `Upload failed (HTTP ${xhr.status}).`));
+        return;
+      }
+
+      try {
+        await fetchVideos();
+        el.status.textContent = 'Upload complete.';
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    xhr.send(fd);
   });
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Upload failed.');
-  }
-
-  await fetchVideos();
-  el.status.textContent = 'Upload complete.';
 }
 
 async function deleteVideo(name) {
@@ -568,11 +594,15 @@ el.uploadForm.addEventListener('submit', async (event) => {
     return;
   }
 
+  const uploadButton = el.uploadForm.querySelector('button[type="submit"]');
+  uploadButton.disabled = true;
   try {
     await uploadVideo(file);
     el.uploadForm.reset();
   } catch (err) {
     el.status.textContent = err.message;
+  } finally {
+    uploadButton.disabled = false;
   }
 });
 

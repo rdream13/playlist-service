@@ -6,6 +6,11 @@ const state = {
   mainVideos: [],
   favoritesPlaylists: [],
   pool: [],
+  // Shuffled videos still waiting to play this round; refilled only when empty.
+  deck: [],
+  lastPickedName: '',
+  // Per video: [{start, end}] seconds already shown this session, so repeat visits use fresh parts.
+  playedRanges: new Map(),
   active: false,
   clipEndTime: 0,
   currentVideoName: '',
@@ -119,12 +124,88 @@ function setNowPlaying(name) {
   el.nowPlaying.textContent = `Now Playing: ${name || 'none'}`;
 }
 
+function shuffleArray(items) {
+  const shuffled = [...items];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+// Every video plays once before any repeats, instead of independent picks that often land on the same few.
 function pickRandomVideo() {
   if (!state.pool.length) {
     return null;
   }
-  const index = Math.floor(Math.random() * state.pool.length);
-  return state.pool[index];
+
+  if (!state.deck.length) {
+    state.deck = shuffleArray(state.pool);
+    // The next pick is the last element; don't let a new round open with the video that just played.
+    const lastIndex = state.deck.length - 1;
+    if (lastIndex > 0 && state.deck[lastIndex].name === state.lastPickedName) {
+      [state.deck[0], state.deck[lastIndex]] = [state.deck[lastIndex], state.deck[0]];
+    }
+  }
+
+  const video = state.deck.pop();
+  state.lastPickedName = video.name;
+  return video;
+}
+
+function mergeRanges(ranges) {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const merged = [];
+  sorted.forEach((range) => {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) {
+      last.end = Math.max(last.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  });
+  return merged;
+}
+
+// Picks a start whose whole clip avoids parts already played; once nothing fits, the video starts a fresh cycle.
+function pickFreshStart(videoName, duration, clipSeconds) {
+  if (duration <= clipSeconds) {
+    return 0;
+  }
+
+  const played = mergeRanges(state.playedRanges.get(videoName) || []);
+  const gaps = [];
+  let cursor = 0;
+  played.forEach((range) => {
+    if (range.start > cursor) {
+      gaps.push({ from: cursor, to: range.start });
+    }
+    cursor = Math.max(cursor, range.end);
+  });
+  if (cursor < duration) {
+    gaps.push({ from: cursor, to: duration });
+  }
+
+  const fits = gaps.filter((gap) => gap.to - gap.from >= clipSeconds);
+  if (!fits.length) {
+    state.playedRanges.set(videoName, []);
+    return Math.random() * (duration - clipSeconds);
+  }
+
+  // Bigger unplayed stretches are more likely, so coverage stays even.
+  const totalSize = fits.reduce((sum, gap) => sum + (gap.to - gap.from), 0);
+  let roll = Math.random() * totalSize;
+  const gap = fits.find((candidate) => {
+    roll -= candidate.to - candidate.from;
+    return roll <= 0;
+  }) || fits[fits.length - 1];
+  return gap.from + Math.random() * (gap.to - gap.from - clipSeconds);
+}
+
+function recordPlayedRange(videoName, start, end) {
+  const ranges = state.playedRanges.get(videoName) || [];
+  ranges.push({ start, end });
+  state.playedRanges.set(videoName, ranges);
 }
 
 function playHistoryEntry(index) {
@@ -184,6 +265,9 @@ function startTv() {
   }
 
   state.pool = pool;
+  state.deck = [];
+  state.lastPickedName = '';
+  state.playedRanges = new Map();
   state.active = true;
   state.history = [];
   state.historyIndex = -1;
@@ -225,8 +309,13 @@ el.player.addEventListener('loadedmetadata', () => {
 
   if (entry.start === undefined) {
     const clipSeconds = getClipSeconds();
-    entry.start = duration > clipSeconds ? Math.random() * (duration - clipSeconds) : 0;
+    entry.start = pickFreshStart(entry.video.name, duration, clipSeconds);
     entry.clipSeconds = clipSeconds;
+    recordPlayedRange(
+      entry.video.name,
+      entry.start,
+      duration > 0 ? Math.min(duration, entry.start + clipSeconds) : entry.start + clipSeconds
+    );
   }
 
   state.clipEndTime = duration > 0 ? Math.min(duration, entry.start + entry.clipSeconds) : entry.start + entry.clipSeconds;
