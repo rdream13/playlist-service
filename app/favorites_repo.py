@@ -26,9 +26,13 @@ def ensure_video_row(filename: str) -> None:
 
 
 def is_video_in_favorites(filename: str) -> bool:
+    # Must filter kind='manual': auto category/person/keyword tags are NOT favorites,
+    # and counting them here would make Delete only hide (never unlink) auto-tagged videos.
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT 1 FROM video_tags WHERE video_filename = ? LIMIT 1", (filename,)
+            "SELECT 1 FROM video_tags vt JOIN tags t ON t.id = vt.tag_id "
+            "WHERE vt.video_filename = ? AND t.kind = 'manual' LIMIT 1",
+            (filename,),
         ).fetchone()
     return row is not None
 

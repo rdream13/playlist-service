@@ -157,6 +157,9 @@ async def run_ytdlp_download(
         "%(title).180B [%(id)s].%(ext)s",
         "--format",
         "bv*+ba/b",
+        # Prefer H.264/AAC: "best" often picks AV1 4K streams that browsers/TVs can't decode smoothly.
+        "--format-sort",
+        "vcodec:h264,res,acodec:m4a",
         "--merge-output-format",
         "mp4",
     ]
