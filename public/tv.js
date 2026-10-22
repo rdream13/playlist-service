@@ -29,8 +29,13 @@ const el = {
   player: document.getElementById('tvPlayer'),
   nowPlaying: document.getElementById('tvNowPlaying'),
   status: document.getElementById('tvStatus'),
-  clipSeconds: document.getElementById('tvClipSeconds')
+  clipSeconds: document.getElementById('tvClipSeconds'),
+  fullVideos: document.getElementById('tvFullVideos')
 };
+
+function isFullVideoMode() {
+  return Boolean(el.fullVideos?.checked);
+}
 
 function getClipSeconds() {
   const parsed = Number.parseInt(el.clipSeconds?.value, 10);
@@ -240,7 +245,7 @@ function advanceToNextClip() {
   }
 
   // start/clipSeconds are filled in once metadata loads, so Previous can later replay this exact clip.
-  state.history.push({ video, start: undefined, clipSeconds: undefined });
+  state.history.push({ video, start: undefined, clipSeconds: undefined, fullVideo: isFullVideoMode() });
   playHistoryEntry(state.history.length - 1);
 }
 
@@ -275,7 +280,9 @@ function startTv() {
   el.stopBtn.disabled = false;
   el.prevBtn.disabled = false;
   el.nextBtn.disabled = false;
-  el.status.textContent = `TV started with ${pool.length} video(s) in rotation, ${getClipSeconds()}s clips.`;
+  el.status.textContent = `TV started with ${pool.length} video(s) in rotation, ${
+    isFullVideoMode() ? 'full videos' : `${getClipSeconds()}s clips`
+  }.`;
   advanceToNextClip();
 }
 
@@ -306,6 +313,17 @@ el.player.addEventListener('loadedmetadata', () => {
   }
 
   const duration = Number.isFinite(el.player.duration) ? el.player.duration : 0;
+
+  if (entry.fullVideo) {
+    entry.start = 0;
+    // No clip end; the 'ended' event advances to the next video.
+    state.clipEndTime = 0;
+    el.player.currentTime = 0;
+    el.player.play().catch(() => {
+      el.status.textContent = 'Autoplay blocked. Press play on the player to continue TV playback.';
+    });
+    return;
+  }
 
   if (entry.start === undefined) {
     const clipSeconds = getClipSeconds();
@@ -347,6 +365,10 @@ el.player.addEventListener('error', () => {
   }
 });
 
+el.fullVideos.addEventListener('change', () => {
+  el.clipSeconds.disabled = el.fullVideos.checked;
+});
+
 el.startBtn.addEventListener('click', () => {
   startTv();
 });
@@ -373,6 +395,8 @@ async function loadSources() {
   await Promise.all([fetchMainVideos(), fetchFavoritesPlaylists()]);
   renderSourceList();
 }
+
+el.clipSeconds.disabled = el.fullVideos.checked;
 
 loadSources().catch((err) => {
   el.status.textContent = err.message;
