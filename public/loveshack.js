@@ -692,6 +692,28 @@ if (el.favoriteForm) {
   });
 }
 
+async function loadQuickLinks() {
+  const container = document.getElementById('quickLinks');
+  if (!container) return;
+  const res = await fetch('/api/quick-links');
+  if (!res.ok) return;
+  const links = await res.json();
+  container.replaceChildren(
+    ...links.map(({ name, url }) => {
+      const a = document.createElement('a');
+      a.href = url;
+      a.textContent = name;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      return a;
+    })
+  );
+}
+
+loadQuickLinks().catch(() => {
+  // Quick links are optional; ignore load failures.
+});
+
 fetchVideos().catch((err) => {
   el.status.textContent = err.message;
 });

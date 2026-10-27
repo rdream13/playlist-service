@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.config import ROOT_DIR, PUBLIC_DIR, VIDEOS_DIR, is_allowed_video, safe_video_path, ensure_directories
+from app.config import ROOT_DIR, PUBLIC_DIR, QUICK_LINKS_PATH, VIDEOS_DIR, is_allowed_video, safe_video_path, ensure_directories
 from app.db import init_db
 import app.downloads as downloads_module
 import app.services.ingest as ingest_module
@@ -77,10 +77,22 @@ class RevalidatingStaticFiles(StaticFiles):
         return response
 
 
+class MediaStaticFiles(StaticFiles):
+    # Starlette's default 64KB read chunks starve playback on spinning disks (~3MB/s);
+    # 1MB chunks let sequential reads run at full drive speed.
+    CHUNK_SIZE = 1024 * 1024
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        if isinstance(response, FileResponse):
+            response.chunk_size = self.CHUNK_SIZE
+        return response
+
+
 _NO_CACHE = {"Cache-Control": "no-cache"}
 
 app.mount("/assets", RevalidatingStaticFiles(directory=str(PUBLIC_DIR)), name="assets")
-app.mount("/media", StaticFiles(directory=str(VIDEOS_DIR)), name="media")
+app.mount("/media", MediaStaticFiles(directory=str(VIDEOS_DIR)), name="media")
 
 _PAGE_ROUTES = {
     "/loveshack": "loveshack.html",
@@ -103,6 +115,24 @@ for route_path, file_name in _PAGE_ROUTES.items():
 @app.get("/")
 def root() -> FileResponse:
     return FileResponse(str(PUBLIC_DIR / "loveshack.html"), headers=_NO_CACHE)
+
+
+@app.get("/api/quick-links")
+def get_quick_links() -> JSONResponse:
+    links = []
+    if QUICK_LINKS_PATH.exists():
+        for raw in QUICK_LINKS_PATH.read_text(encoding="utf-8-sig").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, url = line.partition("=")
+            name, url = name.strip(), url.strip()
+            if not name or not url:
+                continue
+            if not url.lower().startswith(("http://", "https://")):
+                url = f"https://{url}"
+            links.append({"name": name, "url": url})
+    return JSONResponse(links, headers=_NO_CACHE)
 
 
 class RenameBody(BaseModel):

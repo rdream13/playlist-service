@@ -1,0 +1,13 @@
+# Quick links shown on the main page. One entry per line:
+#   Display Name = https://web.url
+# Blank lines and lines starting with # are ignored.
+faphouse = https://faphouse.com/
+xhamster = https://xhamster.com
+xhamster-hd = https://xhamster.com/4k
+pornhub = https://pornhub.com
+xvideos = https://xvideos.com
+eporner = https://www.eporner.com
+eporner-hd = https://www.eporner.com/cat/all/?quality=2160
+xnxx = https://xnxx.com
+spankbang = https://spankbang.com
+

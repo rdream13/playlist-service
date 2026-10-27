@@ -15,6 +15,7 @@ PUBLIC_DIR = ROOT_DIR / "public"
 LOG_DIR = ROOT_DIR / "logs"
 THUMBNAILS_DIR = ROOT_DIR / "thumbnails"
 LIBRARY_DB_PATH = ROOT_DIR / "library.db"
+QUICK_LINKS_PATH = ROOT_DIR / "quick-links.txt"
 
 LOCALAPPDATA_DIR = os.environ.get("LOCALAPPDATA", "")
 WINGET_PACKAGES_DIR = Path(LOCALAPPDATA_DIR) / "Microsoft" / "WinGet" / "Packages" if LOCALAPPDATA_DIR else None
