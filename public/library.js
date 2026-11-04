@@ -1,6 +1,10 @@
 const state = {
   results: [],
-  selectedName: ''
+  playlists: [],
+  selectedName: '',
+  checked: new Set(),
+  lastCheckedIndex: -1,
+  searchSeq: 0
 };
 
 const el = {
@@ -27,7 +31,15 @@ const el = {
   metaCategory: document.getElementById('metaCategory'),
   metaPeople: document.getElementById('metaPeople'),
   metaKeywords: document.getElementById('metaKeywords'),
-  categoryOptions: document.getElementById('categoryOptions')
+  categoryOptions: document.getElementById('categoryOptions'),
+  selectAllBox: document.getElementById('selectAllBox'),
+  bulkCount: document.getElementById('bulkCount'),
+  bulkClearBtn: document.getElementById('bulkClearBtn'),
+  bulkTarget: document.getElementById('bulkTarget'),
+  bulkNewName: document.getElementById('bulkNewName'),
+  bulkCopyBtn: document.getElementById('bulkCopyBtn'),
+  bulkMoveBtn: document.getElementById('bulkMoveBtn'),
+  bulkStatus: document.getElementById('bulkStatus')
 };
 
 function populateSelect(select, values, placeholderLabel) {
@@ -59,6 +71,7 @@ async function loadTags() {
   const categoryTagNames = (tags.category || []).map((t) => t.name);
   const personNames = (tags.person || []).map((t) => t.name).sort((a, b) => a.localeCompare(b));
   const categories = data.categories || [];
+  state.playlists = (tags.manual || []).slice().sort((a, b) => a.name.localeCompare(b.name));
 
   populateSelect(el.tagFilter, tagNames, 'Any tag');
   populateSelect(el.categoryFilter, Array.from(new Set([...categories, ...categoryTagNames])).sort((a, b) => a.localeCompare(b)), 'Any category');
@@ -70,10 +83,104 @@ async function loadTags() {
     option.value = label;
     el.categoryOptions.appendChild(option);
   });
+
+  const previousTarget = el.bulkTarget.value;
+  el.bulkTarget.innerHTML = '<option value="">Send to playlist...</option>';
+  state.playlists.forEach((playlist) => {
+    const option = document.createElement('option');
+    option.value = playlist.name;
+    option.textContent = `${playlist.name} (${playlist.count})`;
+    el.bulkTarget.appendChild(option);
+  });
+  if (state.playlists.some((playlist) => playlist.name === previousTarget)) {
+    el.bulkTarget.value = previousTarget;
+  }
+  updateBulkBar();
 }
 
-function renderTagChips(container, tags) {
-  container.innerHTML = '';
+// A "move" needs a source playlist: only offered when the tag filter is a manual playlist.
+function currentSourcePlaylist() {
+  const tag = el.tagFilter.value;
+  return tag && state.playlists.some((playlist) => playlist.name === tag) ? tag : '';
+}
+
+function updateBulkBar() {
+  const visibleNames = state.results.map((video) => video.name);
+  const visibleChecked = visibleNames.filter((name) => state.checked.has(name)).length;
+  const offscreen = state.checked.size - visibleChecked;
+  el.bulkCount.textContent = `${state.checked.size} selected${offscreen > 0 ? ` (${offscreen} not in current results)` : ''}`;
+  el.selectAllBox.checked = visibleNames.length > 0 && visibleChecked === visibleNames.length;
+  el.selectAllBox.indeterminate = visibleChecked > 0 && visibleChecked < visibleNames.length;
+  el.selectAllBox.disabled = visibleNames.length === 0;
+
+  const hasSelection = state.checked.size > 0;
+  el.bulkClearBtn.disabled = !hasSelection;
+  el.bulkCopyBtn.disabled = !hasSelection;
+  el.bulkMoveBtn.disabled = !hasSelection;
+
+  const source = currentSourcePlaylist();
+  el.bulkMoveBtn.hidden = !source;
+  el.bulkMoveBtn.title = source ? `Add to the target playlist and remove from "${source}"` : '';
+}
+
+function setChecked(name, checked) {
+  if (checked) {
+    state.checked.add(name);
+  } else {
+    state.checked.delete(name);
+  }
+}
+
+async function sendSelectedToPlaylist({ move = false } = {}) {
+  const targetName = el.bulkNewName.value.trim() || el.bulkTarget.value;
+  if (!state.checked.size) {
+    el.bulkStatus.textContent = 'Select one or more videos first.';
+    return;
+  }
+  if (!targetName) {
+    el.bulkStatus.textContent = 'Choose a playlist or enter a new playlist name.';
+    return;
+  }
+  const source = move ? currentSourcePlaylist() : '';
+  if (move && source.toLowerCase() === targetName.toLowerCase()) {
+    el.bulkStatus.textContent = 'Target playlist is the same as the source playlist.';
+    return;
+  }
+
+  el.bulkCopyBtn.disabled = true;
+  el.bulkMoveBtn.disabled = true;
+  el.bulkStatus.textContent = move ? 'Moving...' : 'Copying...';
+  try {
+    const res = await fetch('/api/favorites/add-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        videoNames: Array.from(state.checked),
+        playlistName: targetName,
+        removeFromPlaylist: source || null
+      })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error || body.detail || 'Failed to send to playlist.');
+    }
+    el.bulkStatus.textContent = body.message || 'Done.';
+    state.checked.clear();
+    el.bulkNewName.value = '';
+    await loadTags();
+    el.bulkTarget.value = state.playlists.some((p) => p.name === targetName) ? targetName : el.bulkTarget.value;
+    await fetchResults();
+  } catch (err) {
+    el.bulkStatus.textContent = err.message || 'Failed to send to playlist.';
+  } finally {
+    updateBulkBar();
+  }
+}
+
+function renderTagChips(container, tags, { append = false } = {}) {
+  if (!append) {
+    container.innerHTML = '';
+  }
   (tags || []).forEach((tag) => {
     const chip = document.createElement('span');
     chip.className = `tag-chip tag-chip-${tag.kind}`;
@@ -82,18 +189,126 @@ function renderTagChips(container, tags) {
   });
 }
 
+function getVideoPlaylists(video) {
+  return (video.tags || []).filter((tag) => tag.kind === 'manual').map((tag) => tag.name);
+}
+
+function renderPlaylistMembership(container, playlistNames) {
+  container.innerHTML = '';
+  const label = document.createElement('span');
+  label.textContent = playlistNames.length ? 'Playlists:' : 'Not in any playlist';
+  container.appendChild(label);
+  renderTagChips(
+    container,
+    playlistNames.map((name) => ({ name, kind: 'manual' })),
+    { append: true }
+  );
+}
+
+async function copyVideoToPlaylist(videoName, playlistName) {
+  const res = await fetch('/api/favorites/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoName, playlistName })
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || body.detail || 'Failed to copy to playlist.');
+  }
+}
+
+function wireCopyPanel(row, video, playlistNames) {
+  const copyPanel = row.querySelector('.copy-panel');
+  const copyTarget = row.querySelector('.copy-target');
+  const copyNew = row.querySelector('.copy-new');
+  const inPlaylist = new Set(playlistNames.map((name) => name.toLowerCase()));
+
+  row.querySelector('.copy').addEventListener('click', () => {
+    copyTarget.innerHTML = '<option value="">Copy to playlist...</option>';
+    state.playlists
+      .filter((playlist) => !inPlaylist.has(playlist.name.toLowerCase()))
+      .forEach((playlist) => {
+        const option = document.createElement('option');
+        option.value = playlist.name;
+        option.textContent = `${playlist.name} (${playlist.count})`;
+        copyTarget.appendChild(option);
+      });
+    copyNew.value = '';
+    copyPanel.hidden = !copyPanel.hidden;
+    if (!copyPanel.hidden) {
+      copyNew.focus();
+    }
+  });
+
+  row.querySelector('.copy-cancel').addEventListener('click', () => {
+    copyPanel.hidden = true;
+  });
+
+  const copyToTarget = async () => {
+    const targetName = copyNew.value.trim() || copyTarget.value;
+    if (!targetName) {
+      el.status.textContent = 'Choose a playlist or enter a new playlist name to copy to.';
+      return;
+    }
+    if (inPlaylist.has(targetName.toLowerCase())) {
+      el.status.textContent = `${video.name} is already in ${targetName}.`;
+      return;
+    }
+
+    try {
+      await copyVideoToPlaylist(video.name, targetName);
+      el.status.textContent = `Copied ${video.name} to ${targetName}.`;
+      await Promise.all([loadTags(), fetchResults()]);
+    } catch (err) {
+      el.status.textContent = err.message || 'Failed to copy to playlist.';
+    }
+  };
+
+  row.querySelector('.copy-confirm').addEventListener('click', copyToTarget);
+  copyNew.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      copyToTarget();
+    }
+  });
+}
+
 function renderResults() {
   el.results.innerHTML = '';
-  el.resultsHeading.textContent = `Results (${state.results.length})`;
+  el.resultsHeading.textContent = `Results (${state.results.length})${state.fuzzy ? ' - no exact matches, showing close matches' : ''}`;
 
-  state.results.forEach((video) => {
+  state.results.forEach((video, index) => {
     const node = el.tpl.content.cloneNode(true);
     const li = node.querySelector('li');
-    node.querySelector('.video-name').textContent = video.name;
-    renderTagChips(node.querySelector('.library-tags'), video.tags);
+    const playlistNames = getVideoPlaylists(video);
+    node.querySelector('.video-name').textContent = video.title ? `${video.name} — ${video.title}` : video.name;
+    const box = node.querySelector('.select-box');
+    box.checked = state.checked.has(video.name);
+    li.classList.toggle('checked', box.checked);
+    box.addEventListener('click', (event) => {
+      // Shift-click selects/deselects the whole range since the last clicked row.
+      if (event.shiftKey && state.lastCheckedIndex >= 0 && state.lastCheckedIndex < state.results.length) {
+        const [start, end] = [state.lastCheckedIndex, index].sort((a, b) => a - b);
+        state.results.slice(start, end + 1).forEach((v) => setChecked(v.name, box.checked));
+        state.lastCheckedIndex = index;
+        renderResults();
+        return;
+      }
+      setChecked(video.name, box.checked);
+      li.classList.toggle('checked', box.checked);
+      state.lastCheckedIndex = index;
+      updateBulkBar();
+    });
+    renderPlaylistMembership(node.querySelector('.library-playlists'), playlistNames);
+    // Playlists get their own line above, so leave them out of the generic tag chips.
+    renderTagChips(
+      node.querySelector('.library-tags'),
+      (video.tags || []).filter((tag) => tag.kind !== 'manual')
+    );
 
     node.querySelector('.play').addEventListener('click', () => playVideo(video));
     node.querySelector('.edit').addEventListener('click', () => selectVideoForEdit(video.name));
+    wireCopyPanel(li, video, playlistNames);
 
     if (video.name === state.selectedName) {
       li.classList.add('selected');
@@ -101,6 +316,7 @@ function renderResults() {
 
     el.results.appendChild(node);
   });
+  updateBulkBar();
 }
 
 async function fetchResults() {
@@ -110,12 +326,19 @@ async function fetchResults() {
   if (el.categoryFilter.value) params.set('category', el.categoryFilter.value);
   if (el.personFilter.value) params.set('person', el.personFilter.value);
 
+  const seq = ++state.searchSeq;
   const res = await fetch(`/api/library/search?${params.toString()}`);
   if (!res.ok) {
     throw new Error('Search failed.');
   }
   const data = await res.json();
+  // Ignore stale responses when the user keeps typing.
+  if (seq !== state.searchSeq) {
+    return;
+  }
   state.results = data.videos || [];
+  state.fuzzy = Boolean(data.fuzzy);
+  state.lastCheckedIndex = -1;
   renderResults();
 }
 
@@ -209,6 +432,9 @@ function renderScanStatus(job) {
     el.scanStatus.textContent = `Scanning... ${job.processed}/${job.total}${job.current ? ` (${job.current})` : ''}`;
   } else if (job.status === 'completed') {
     el.scanStatus.textContent = `Scan complete: tagged ${job.processed}/${job.total} video(s).`;
+  } else if (job.status === 'failed') {
+    const reason = job.results && job.results[0] && job.results[0].error;
+    el.scanStatus.textContent = `Scan failed${reason ? `: ${reason}` : '.'}`;
   }
 }
 
@@ -244,12 +470,44 @@ async function startScan() {
 }
 
 async function init() {
-  el.searchForm.addEventListener('submit', (event) => {
-    event.preventDefault();
+  const runSearch = () => {
     fetchResults().catch((err) => {
       el.status.textContent = err.message || 'Search failed.';
     });
+  };
+  let searchDebounce = null;
+
+  el.searchForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    clearTimeout(searchDebounce);
+    runSearch();
   });
+  el.searchQuery.addEventListener('input', () => {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(runSearch, 250);
+  });
+  [el.tagFilter, el.categoryFilter, el.personFilter].forEach((select) => {
+    select.addEventListener('change', runSearch);
+  });
+
+  el.selectAllBox.addEventListener('change', () => {
+    state.results.forEach((video) => setChecked(video.name, el.selectAllBox.checked));
+    renderResults();
+  });
+  el.bulkClearBtn.addEventListener('click', () => {
+    state.checked.clear();
+    el.bulkStatus.textContent = '';
+    renderResults();
+  });
+  el.bulkCopyBtn.addEventListener('click', () => sendSelectedToPlaylist());
+  el.bulkMoveBtn.addEventListener('click', () => sendSelectedToPlaylist({ move: true }));
+  el.bulkNewName.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      sendSelectedToPlaylist();
+    }
+  });
+
   el.clearSearchBtn.addEventListener('click', clearSearch);
   el.refreshBtn.addEventListener('click', () => {
     Promise.all([loadTags(), fetchResults()]).catch((err) => {

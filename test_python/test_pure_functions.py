@@ -9,7 +9,12 @@ from app.ffmpeg_utils import build_mix_video_name, build_multi_scene_video_name
 from app.inuse import is_video_in_use, mark_videos_in_use, unmark_videos_in_use
 from app.mix_plan import build_mix_plan, compute_video_segments
 from app.trim_service import order_segments_by_group, parse_segment_group
-from app.video_utils import build_trimmed_video_name, is_temporary_trim_file, parse_time_to_seconds
+from app.video_utils import (
+    build_trimmed_video_name,
+    is_temporary_trim_file,
+    parse_time_to_seconds,
+    resolution_quality_label,
+)
 
 
 def assert_close(actual, expected, tol=1e-6):
@@ -20,6 +25,16 @@ def test_temporary_trim_files_are_detected():
     assert is_temporary_trim_file("clip.tmp-123-456.mp4") is True
     assert is_temporary_trim_file("clip [trim 00-00-10_00-00-15].tmp-123-456.mp4") is True
     assert is_temporary_trim_file("clip [trim 00-00-10_00-00-15].mp4") is False
+
+
+def test_resolution_quality_label():
+    assert resolution_quality_label(3840, 2160) == "4K"
+    assert resolution_quality_label(3840, 1600) == "4K"
+    assert resolution_quality_label(1080, 1920) == "1080p"
+    assert resolution_quality_label(1280, 720) == "720p"
+    assert resolution_quality_label(854, 480) == "480p"
+    assert resolution_quality_label(320, 240) == "SD"
+    assert resolution_quality_label(0, 0) is None
 
 
 def test_mark_unmark_videos_in_use_refcount():
@@ -309,3 +324,65 @@ def test_build_mix_video_name_produces_mix_date_style_name():
 
     date = datetime.datetime(2026, 1, 5, 9, 3, 7)
     assert build_mix_video_name(date) == "mix-2026-01-05_09-03-07.mp4"
+
+from app.library_service import fuzzy_score, normalize_search_text
+
+
+def test_normalize_search_text_collapses_separators():
+    assert normalize_search_text("Beach_Day-01.MP4") == "beach day 01 mp4"
+    assert normalize_search_text(None) == ""
+
+
+def test_fuzzy_score_matches_exact_prefix_typo_and_subsequence():
+    fields = ["Beach_Volleyball_2024.mp4", "Summer trip", None, "Emily", "outdoor"]
+    assert fuzzy_score("beach", fields) == 1.0
+    assert fuzzy_score("volley", fields) > 0.9
+    assert fuzzy_score("vollyeball", fields) > 0
+    assert fuzzy_score("emiyl", fields) > 0
+    assert fuzzy_score("bvball", fields) == 0  # first letter must line up with a word
+    assert fuzzy_score("vlybll", fields) > 0
+
+
+def test_fuzzy_score_requires_every_token_and_rejects_noise():
+    fields = ["Beach_Volleyball_2024.mp4", "Summer trip"]
+    assert fuzzy_score("beach summer", fields) > 0
+    assert fuzzy_score("beach mountain", fields) == 0
+    assert fuzzy_score("xq", fields) == 0
+    assert fuzzy_score("", fields) == 1.0
+
+
+def test_fuzzy_score_ranks_exact_above_typo():
+    exact = fuzzy_score("sunset", ["sunset_walk.mp4"])
+    typo = fuzzy_score("sunst", ["sunset_walk.mp4"])
+    assert exact > typo > 0
+
+
+def test_bulk_add_to_playlist_copies_and_moves(tmp_path, monkeypatch):
+    import app.db as db
+    from app.favorites_repo import add_video_to_favorites_playlist, add_videos_to_favorites_playlist
+
+    monkeypatch.setattr(db, "LIBRARY_DB_PATH", tmp_path / "library.db")
+    db.init_db()
+
+    add_video_to_favorites_playlist("a.mp4", "Source")
+    add_video_to_favorites_playlist("b.mp4", "Source")
+    add_video_to_favorites_playlist("a.mp4", "Target")
+
+    result = add_videos_to_favorites_playlist(["a.mp4", "b.mp4", "c.mp4", "b.mp4"], "Target")
+    assert result == {"added": ["b.mp4", "c.mp4"], "skipped": ["a.mp4"], "removed": 0}
+
+    moved = add_videos_to_favorites_playlist(["a.mp4", "b.mp4"], "New List", remove_from="Source")
+    assert moved["added"] == ["a.mp4", "b.mp4"] and moved["removed"] == 2
+
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT t.name, vt.video_filename, vt.position FROM video_tags vt JOIN tags t ON t.id = vt.tag_id "
+            "WHERE t.kind = 'manual' ORDER BY t.name, vt.position"
+        ).fetchall()
+    assert [(r[0], r[1], r[2]) for r in rows] == [
+        ("New List", "a.mp4", 0),
+        ("New List", "b.mp4", 1),
+        ("Target", "a.mp4", 0),
+        ("Target", "b.mp4", 1),
+        ("Target", "c.mp4", 2),
+    ]

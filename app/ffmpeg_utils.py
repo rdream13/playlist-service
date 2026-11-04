@@ -109,6 +109,29 @@ async def get_video_duration(file_path: Path) -> Optional[float]:
         return None
 
 
+async def get_video_resolution(file_path: Path) -> Optional[tuple[int, int]]:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            resolve_ffprobe_bin(),
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json",
+            str(file_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, _stderr_bytes = await process.communicate()
+        if process.returncode != 0:
+            return None
+        streams = json.loads(stdout_bytes or b"{}").get("streams") or []
+        if not streams:
+            return None
+        return int(streams[0]["width"]), int(streams[0]["height"])
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
 async def extract_frame(video_path: Path, timestamp_seconds: float, output_path: Path) -> bool:
     """Grabs a single JPEG frame at `timestamp_seconds` (used by the Phase 7 auto-tagging pipeline)."""
     try:

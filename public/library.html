@@ -36,7 +36,7 @@
         <p id="scanStatus" class="downloader-status"></p>
 
         <form id="searchForm" class="library-search-form">
-          <input id="searchQuery" name="q" type="search" placeholder="Search title, notes, tags..." />
+          <input id="searchQuery" name="q" type="search" autocomplete="off" placeholder="Fuzzy search name, title, notes, tags..." />
           <select id="tagFilter" name="tag">
             <option value="">Any tag</option>
           </select>
@@ -54,6 +54,23 @@
       <section class="favorites-columns">
         <div class="playlist-groups card">
           <h2 id="libraryResultsHeading">Results</h2>
+          <div id="bulkBar" class="bulk-bar">
+            <label class="bulk-select-all">
+              <input id="selectAllBox" type="checkbox" />
+              <span>Select all</span>
+            </label>
+            <span id="bulkCount" class="bulk-count">0 selected</span>
+            <button id="bulkClearBtn" class="btn tiny" type="button">Clear selection</button>
+            <div class="bulk-send">
+              <select id="bulkTarget">
+                <option value="">Send to playlist...</option>
+              </select>
+              <input id="bulkNewName" type="text" maxlength="80" placeholder="Or new playlist name" />
+              <button id="bulkCopyBtn" class="btn tiny btn-primary" type="button">Copy</button>
+              <button id="bulkMoveBtn" class="btn tiny" type="button" hidden>Move</button>
+            </div>
+          </div>
+          <p id="bulkStatus" class="favorite-message"></p>
           <ul id="libraryResults" class="library-results"></ul>
         </div>
 
@@ -91,11 +108,24 @@
 
     <template id="libraryItemTemplate">
       <li>
-        <span class="video-name"></span>
+        <label class="library-row-head">
+          <input class="select-box" type="checkbox" />
+          <span class="video-name"></span>
+        </label>
+        <div class="library-playlists"></div>
         <div class="library-tags"></div>
         <div class="actions">
           <button class="btn tiny play">Play</button>
           <button class="btn tiny edit">Edit</button>
+          <button class="btn tiny copy" type="button" title="Copy to a playlist">Copy to Playlist</button>
+        </div>
+        <div class="copy-panel" hidden>
+          <select class="copy-target">
+            <option value="">Copy to playlist...</option>
+          </select>
+          <input class="copy-new" type="text" maxlength="80" placeholder="Or new playlist name" />
+          <button class="btn tiny btn-primary copy-confirm" type="button">Copy</button>
+          <button class="btn tiny copy-cancel" type="button">Cancel</button>
         </div>
       </li>
     </template>

@@ -34,6 +34,7 @@ from app.downloads import (
 )
 from app.favorites_repo import (
     add_video_to_favorites_playlist,
+    add_videos_to_favorites_playlist,
     delete_favorites_playlist,
     hide_video_from_main,
     is_video_in_favorites,
@@ -46,7 +47,13 @@ from app.favorites_repo import (
 )
 from app.inuse import is_video_in_use
 from app.errors import ApiError
-from app.library_service import get_video_metadata, list_tags, search_videos, update_video_metadata
+from app.library_service import (
+    get_video_metadata,
+    list_tags,
+    search_is_fuzzy_fallback,
+    search_videos,
+    update_video_metadata,
+)
 from app.mix_service import perform_mix
 from app.stitch_service import perform_stitch_clips
 from app.trim_service import perform_trim
@@ -62,6 +69,9 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="playlist-service (Python)", lifespan=lifespan)
+
+# Strong refs so fire-and-forget asyncio tasks aren't garbage-collected mid-run.
+_background_tasks: set[asyncio.Task] = set()
 
 
 @app.exception_handler(ApiError)
@@ -143,6 +153,12 @@ class RenameBody(BaseModel):
 class FavoritesAddBody(BaseModel):
     videoName: str = ""
     playlistName: str = ""
+
+
+class FavoritesBulkAddBody(BaseModel):
+    videoNames: list[str] = []
+    playlistName: str = ""
+    removeFromPlaylist: Optional[str] = None
 
 
 class MoveBody(BaseModel):
@@ -333,6 +349,35 @@ def add_favorite(body: FavoritesAddBody) -> dict:
 
     add_video_to_favorites_playlist(base, safe_playlist_name)
     return {"message": "Added to favorites playlist.", **build_favorites_response()}
+
+
+@app.post("/api/favorites/add-bulk")
+def add_favorites_bulk(body: FavoritesBulkAddBody) -> dict:
+    safe_playlist_name = normalize_playlist_name(body.playlistName)
+    if not body.videoNames or not safe_playlist_name:
+        raise HTTPException(status_code=400, detail="videoNames and playlistName are required.")
+    if len(body.videoNames) > 5000:
+        raise HTTPException(status_code=400, detail="Too many videos in one request.")
+
+    bases: list[str] = []
+    for video_name in body.videoNames:
+        try:
+            base, full = safe_video_path(video_name)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid file path: {video_name}")
+        if not is_allowed_video(base):
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {video_name}")
+        if not full.exists():
+            raise HTTPException(status_code=404, detail=f"Video not found: {video_name}")
+        bases.append(base)
+
+    remove_from = normalize_playlist_name(body.removeFromPlaylist) or None
+    result = add_videos_to_favorites_playlist(bases, safe_playlist_name, remove_from=remove_from)
+    verb = "Moved" if remove_from and result["removed"] else "Added"
+    message = f"{verb} {len(result['added'])} video(s) to {safe_playlist_name}."
+    if result["skipped"]:
+        message += f" {len(result['skipped'])} already there."
+    return {"message": message, **result, **build_favorites_response()}
 
 
 @app.delete("/api/favorites/playlists/{playlist_name}")
@@ -533,7 +578,8 @@ def library_search(
     category: Optional[str] = Query(default=None),
     person: Optional[str] = Query(default=None),
 ) -> dict:
-    return {"videos": search_videos(q=q, tag=tag, category=category, person=person)}
+    videos = search_videos(q=q, tag=tag, category=category, person=person)
+    return {"videos": videos, "fuzzy": search_is_fuzzy_fallback(q, videos)}
 
 
 @app.get("/api/library/tags")
@@ -559,10 +605,14 @@ def update_video_metadata_route(name: str, body: VideoMetadataBody) -> dict:
 
 
 @app.post("/api/library/scan", status_code=202)
-def start_library_scan() -> dict:
+async def start_library_scan() -> dict:
+    # Must be async: a sync endpoint runs in a worker thread with no event loop for create_task.
     if ingest_module.SCAN_JOB["status"] == "running":
         raise ApiError(409, "A library scan is already running.")
-    asyncio.create_task(ingest_module.run_library_scan())
+    ingest_module.SCAN_JOB.update(status="running", processed=0, total=0, current=None, results=[])
+    task = asyncio.create_task(ingest_module.run_library_scan())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "started"}
 
 

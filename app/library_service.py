@@ -7,8 +7,9 @@ applied), 'person' and 'keyword' (both multi-valued, freeform).
 """
 from __future__ import annotations
 
-import sqlite3
-from typing import Optional
+import re
+from difflib import SequenceMatcher
+from typing import Iterable, Optional
 
 from app.db import get_connection, now_iso
 from app.errors import ApiError
@@ -17,16 +18,78 @@ from app.videos_repo import list_all_video_files
 
 _METADATA_KINDS = ("person", "keyword")
 
+_WORD_SPLIT_RE = re.compile(r"[^0-9a-z]+")
+# Minimum per-token score for a video to count as a match.
+FUZZY_MATCH_THRESHOLD = 0.72
+# Average score at/above which every token matched exactly, by prefix, or as a substring.
+STRONG_MATCH_SCORE = 0.9
 
-def _build_fts_match_query(raw: str) -> Optional[str]:
-    tokens = [token for token in raw.strip().split() if token]
+
+def normalize_search_text(text: Optional[str]) -> str:
+    """Lowercase and collapse separators (_ - . etc.) so 'Beach_Day-01.mp4' ~ 'beach day 01 mp4'."""
+    if not text:
+        return ""
+    return " ".join(_WORD_SPLIT_RE.split(text.lower())).strip()
+
+
+def _is_subsequence(needle: str, haystack: str) -> bool:
+    it = iter(haystack)
+    return all(ch in it for ch in needle)
+
+
+def _score_token(token: str, text: str, words: list[str]) -> float:
+    if not token:
+        return 1.0
+    if any(word == token for word in words):
+        return 1.0
+    if any(word.startswith(token) for word in words):
+        return 0.95
+    if token in text:
+        return 0.9
+
+    best = 0.0
+    for word in words:
+        # Compare against the word and its same-length prefix so 'volley' still
+        # fuzzy-matches 'volleyball' when typed as 'vollye'.
+        for candidate in {word, word[: len(token)]}:
+            if abs(len(candidate) - len(token)) > max(2, len(token) // 2):
+                continue
+            ratio = SequenceMatcher(None, token, candidate).ratio()
+            if ratio > best:
+                best = ratio
+    # Short tokens are too ambiguous for edit-distance matching.
+    if len(token) <= 2:
+        best = 0.0
+    best *= 0.9
+
+    if len(token) >= 3 and any(
+        word[0] == token[0] and len(word) > len(token) and _is_subsequence(token, word) for word in words
+    ):
+        best = max(best, FUZZY_MATCH_THRESHOLD)
+    return best
+
+
+def fuzzy_score(query: str, fields: Iterable[Optional[str]]) -> float:
+    """Return 0..1 relevance of `query` against the given text fields; 0 means no match.
+
+    Every query token must match something (AND semantics). Each token is scored by
+    exact word > word prefix > substring > typo-tolerant similarity > in-order subsequence.
+    """
+    tokens = normalize_search_text(query).split()
     if not tokens:
-        return None
-    parts = []
+        return 1.0
+    text = " ".join(filter(None, (normalize_search_text(field) for field in fields)))
+    if not text:
+        return 0.0
+    words = text.split()
+
+    total = 0.0
     for token in tokens:
-        escaped = token.replace('"', '""')
-        parts.append(f'"{escaped}"*')
-    return " ".join(parts)
+        score = _score_token(token, text, words)
+        if score < FUZZY_MATCH_THRESHOLD:
+            return 0.0
+        total += score
+    return total / len(tokens)
 
 
 def search_videos(
@@ -39,19 +102,6 @@ def search_videos(
 
     with get_connection() as conn:
         candidate_filenames: Optional[set[str]] = None
-
-        if q:
-            match_query = _build_fts_match_query(q)
-            if match_query:
-                try:
-                    rows = conn.execute(
-                        "SELECT filename FROM videos_fts WHERE videos_fts MATCH ?", (match_query,)
-                    ).fetchall()
-                except sqlite3.OperationalError:
-                    rows = []
-                candidate_filenames = {row["filename"] for row in rows}
-            else:
-                candidate_filenames = set()
 
         for value, kind in ((tag, None), (category, "category"), (person, "person")):
             if not value:
@@ -77,6 +127,7 @@ def search_videos(
         ):
             tags_by_video.setdefault(row["f"], []).append({"name": row["name"], "kind": row["kind"]})
 
+    query = (q or "").strip()
     results = []
     for row in video_rows:
         filename = row["filename"]
@@ -85,6 +136,12 @@ def search_videos(
             continue  # missing/unusable/temp file - not part of the browsable library
         if candidate_filenames is not None and filename not in candidate_filenames:
             continue
+        tags = sorted(tags_by_video.get(filename, []), key=lambda t: (t["kind"], t["name"].lower()))
+        score = 1.0
+        if query:
+            score = fuzzy_score(query, [filename, row["title"], row["notes"], *(t["name"] for t in tags)])
+            if score <= 0:
+                continue
         results.append(
             {
                 "name": filename,
@@ -93,12 +150,21 @@ def search_videos(
                 "notes": row["notes"],
                 "durationSeconds": row["duration_seconds"],
                 "hidden": bool(row["hidden_from_main"]),
-                "tags": sorted(tags_by_video.get(filename, []), key=lambda t: (t["kind"], t["name"].lower())),
+                "tags": tags,
+                "score": round(score, 3),
             }
         )
 
-    results.sort(key=lambda item: item["name"].lower())
+    results.sort(key=lambda item: (-item["score"], item["name"].lower()))
+    # Only fall back to typo-level matches when nothing matches closely; otherwise
+    # e.g. 'sports' would also list every video tagged 'shorts'.
+    if query and results and results[0]["score"] >= STRONG_MATCH_SCORE:
+        results = [item for item in results if item["score"] >= STRONG_MATCH_SCORE]
     return results
+
+
+def search_is_fuzzy_fallback(q: Optional[str], results: list[dict]) -> bool:
+    return bool((q or "").strip()) and bool(results) and results[0]["score"] < STRONG_MATCH_SCORE
 
 
 def list_tags() -> dict:

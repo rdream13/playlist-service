@@ -86,6 +86,57 @@ def add_video_to_favorites_playlist(filename: str, playlist_name: str) -> None:
             conn.commit()
 
 
+def add_videos_to_favorites_playlist(
+    filenames: list[str], playlist_name: str, remove_from: Optional[str] = None
+) -> dict:
+    """Bulk add (in order) to `playlist_name` in one transaction, skipping videos already there.
+
+    If `remove_from` names a different manual playlist, the videos are also removed from it (a move).
+    """
+    now = now_iso()
+    added: list[str] = []
+    skipped: list[str] = []
+    removed = 0
+    with get_connection() as conn:
+        tag_id = get_or_create_tag(conn, playlist_name)
+        position = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) AS max_pos FROM video_tags WHERE tag_id = ?", (tag_id,)
+        ).fetchone()["max_pos"]
+        for filename in dict.fromkeys(filenames):
+            conn.execute(
+                "INSERT OR IGNORE INTO videos (filename, added_at, hidden_from_main) VALUES (?, ?, 0)",
+                (filename, now),
+            )
+            already = conn.execute(
+                "SELECT 1 FROM video_tags WHERE video_filename = ? AND tag_id = ?", (filename, tag_id)
+            ).fetchone()
+            if already:
+                skipped.append(filename)
+                continue
+            position += 1
+            conn.execute(
+                "INSERT INTO video_tags (video_filename, tag_id, position, added_at) VALUES (?, ?, ?, ?)",
+                (filename, tag_id, position, now),
+            )
+            added.append(filename)
+
+        if remove_from and remove_from != playlist_name:
+            source = conn.execute(
+                "SELECT id FROM tags WHERE name = ? AND kind = 'manual'", (remove_from,)
+            ).fetchone()
+            if source:
+                for filename in dict.fromkeys(filenames):
+                    removed += conn.execute(
+                        "DELETE FROM video_tags WHERE tag_id = ? AND video_filename = ?", (source["id"], filename)
+                    ).rowcount
+                if removed:
+                    conn.execute("UPDATE tags SET updated_at = ? WHERE id = ?", (now, source["id"]))
+
+        conn.execute("UPDATE tags SET updated_at = ? WHERE id = ?", (now, tag_id))
+        conn.commit()
+    return {"added": added, "skipped": skipped, "removed": removed}
+
+
 def playlist_exists(playlist_name: str) -> bool:
     with get_connection() as conn:
         row = conn.execute("SELECT 1 FROM tags WHERE name = ? AND kind = 'manual'", (playlist_name,)).fetchone()

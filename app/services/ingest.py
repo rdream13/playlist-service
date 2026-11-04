@@ -1,6 +1,6 @@
 """Auto-tagging ingest pipeline (Phase 7): sample a couple of frames per video via
 ffmpeg, run CLIP zero-shot category classification + YOLO object detection, write
-results into `video_tags` as kind='category'/'object' with source='auto' so they're
+results into `video_tags` as kind='category'/'object'/'quality' with source='auto' so they're
 distinguishable from (and safely replaceable without touching) manual tags.
 """
 from __future__ import annotations
@@ -12,9 +12,10 @@ from pathlib import Path
 from app.config import VIDEOS_DIR
 from app.db import get_connection, now_iso
 from app.favorites_repo import ensure_video_row, get_or_create_tag
-from app.ffmpeg_utils import extract_frame, get_video_duration
+from app.ffmpeg_utils import extract_frame, get_video_duration, get_video_resolution
 from app.services.tagging.clip_tagger import classify_frame
 from app.services.tagging.yolo_tagger import detect_objects
+from app.video_utils import resolution_quality_label
 from app.videos_repo import list_all_video_files
 
 _FRAME_POSITION_RATIOS = (0.25, 0.75)  # sample 2 frames: 1/4 and 3/4 through the clip
@@ -36,7 +37,7 @@ def _clear_auto_tags(conn, filename: str) -> None:
         """
         DELETE FROM video_tags
         WHERE video_filename = ? AND source = 'auto'
-          AND tag_id IN (SELECT id FROM tags WHERE kind IN ('category', 'object'))
+          AND tag_id IN (SELECT id FROM tags WHERE kind IN ('category', 'object', 'quality'))
         """,
         (filename,),
     )
@@ -58,6 +59,8 @@ async def ingest_video(filename: str) -> dict:
         return {"name": filename, "skipped": True, "reason": "file not found"}
 
     duration = await get_video_duration(video_path) or 0.0
+    resolution = await get_video_resolution(video_path)
+    quality = resolution_quality_label(*resolution) if resolution else None
     labels = _get_category_labels()
     category_votes: dict[str, int] = {}
     object_names: set[str] = set()
@@ -84,15 +87,21 @@ async def ingest_video(filename: str) -> dict:
         _clear_auto_tags(conn, filename)
         if best_category:
             _add_auto_tag(conn, filename, best_category, "category")
+        if quality:
+            _add_auto_tag(conn, filename, quality, "quality")
         for name in object_names:
             _add_auto_tag(conn, filename, name, "object")
         conn.commit()
 
-    return {"name": filename, "category": best_category, "objects": sorted(object_names)}
+    return {"name": filename, "category": best_category, "quality": quality, "objects": sorted(object_names)}
 
 
 async def run_library_scan() -> None:
-    files = [video["name"] for video in list_all_video_files()]
+    try:
+        files = [video["name"] for video in list_all_video_files()]
+    except Exception as err:  # noqa: BLE001 - surface failure instead of leaving status stuck on "running"
+        SCAN_JOB.update(status="failed", current=None, results=[{"error": str(err)}])
+        return
     SCAN_JOB.update(status="running", processed=0, total=len(files), current=None, results=[])
 
     for name in files:

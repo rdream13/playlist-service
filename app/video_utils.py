@@ -62,6 +62,29 @@ def build_trimmed_video_name(file_name: str, start_seconds: float, end_seconds: 
     return f"{stem} [trim {start_stamp}_{end_stamp}]{ext}"
 
 
+_QUALITY_TIERS = (
+    ("8K", 7680, 4320),
+    ("4K", 3840, 2160),
+    ("1440p", 2560, 1440),
+    ("1080p", 1920, 1080),
+    ("720p", 1280, 720),
+    ("480p", 854, 480),
+    ("360p", 640, 360),
+)
+
+
+def resolution_quality_label(width: int, height: int) -> Optional[str]:
+    """Maps pixel dimensions to a quality tag. Uses long/short sides so portrait and
+    letterboxed (e.g. 3840x1600) videos still land in the right tier."""
+    if not width or not height or width <= 0 or height <= 0:
+        return None
+    long_side, short_side = max(width, height), min(width, height)
+    for label, tier_long, tier_short in _QUALITY_TIERS:
+        if long_side >= tier_long or short_side >= tier_short:
+            return label
+    return "SD"
+
+
 def is_usable_video_file(file_path: Path) -> bool:
     try:
         if not file_path.exists():
